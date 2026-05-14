@@ -1,83 +1,87 @@
 # DeActive by MyPC
 
-Version: `1.2.0`
+Phiên bản: `1.3.0`
 
-`DeActive by MyPC` is a conservative Windows/Office activation cleanup tool for IT technicians who need to remove non-standard MAS/KMS-style activation configuration so the machine can be activated again with a legitimate Windows digital license, product key, Microsoft account, or Microsoft 365 account.
+## Công cụ này dùng để làm gì?
 
-## Files
+DeActive by MyPC hỗ trợ dọn trạng thái kích hoạt cũ của Windows và Microsoft Office để người dùng có thể chuyển sang key bản quyền chính hãng hoặc đăng nhập tài khoản Microsoft/Microsoft 365 hợp lệ.
 
-- `DeActive-by-MyPC.bat` - public branded launcher; calls the `.cmd` file.
-- `Clean-MAS-Activation.cmd` - backend launcher with a simple menu.
-- `Clean-MAS-Activation.ps1` - main PowerShell 5.1+ implementation.
+Công cụ không kích hoạt lậu, không bypass bản quyền, không cài KMS, không gọi server kích hoạt không chính thống và không xóa Event Log hệ thống.
 
-## Menu
+## Tính năng chính
 
-Run `DeActive-by-MyPC.bat` as Administrator, then choose:
+- Kiểm tra thử bằng Dry-run, không thay đổi hệ thống
+- Tạo Restore Point trước khi xử lý
+- Gỡ key Windows/Office cũ
+- Xóa cấu hình KMS/MAS còn sót lại
+- Xóa lịch tự kích hoạt
+- Dọn cache license Office
+- Hỗ trợ xử lý Ohook
+- Đọc key Windows OEM đi theo main / BIOS / UEFI
+- Có log, backup registry và report rõ ràng
 
-```text
-1. Dry-run only (simulate cleanup, no changes)
-2. Clean Office and Windows activation keys/configuration
-3. Clean Office activation keys/configuration only
-4. Clean Windows activation keys/configuration only
-5. Read OEM embedded key from motherboard / BIOS / UEFI
-```
+## Hướng dẫn sử dụng nhanh
 
-Real cleanup menu options use `-CreateRestorePoint` by default. If System Restore is disabled, the tool logs a warning and continues.
+1. Giải nén tool.
+2. Chuột phải `DeActive-by-MyPC.bat`.
+3. Chọn Run as administrator.
+4. Chọn ngôn ngữ. Nếu không chọn sau vài giây, công cụ mặc định dùng tiếng Việt.
+5. Chọn mục cần chạy:
+   - 1 = Kiểm tra thử, không thay đổi hệ thống
+   - 2 = Dọn cả Windows và Office
+   - 3 = Chỉ dọn Office
+   - 4 = Chỉ dọn Windows
+   - 5 = Đọc key Windows OEM đi theo main / BIOS / UEFI
+   - 6 = Mở thư mục log và báo cáo
+6. Chạy xong restart máy nếu vừa dọn Windows/Office.
+7. Nhập key bản quyền hoặc đăng nhập Microsoft/Microsoft 365.
 
-Menu option 5 is read-only. It does not create a restore point, remove keys, install keys, activate Windows, restart licensing services, or call `slmgr /ipk` / `slmgr /ato`.
+## Log, backup và report
 
-## Read OEM Embedded Key
-
-The tool can read the Windows product key embedded in motherboard BIOS/UEFI firmware by querying `SoftwareLicensingService.OA3xOriginalProductKey`.
-
-Notes:
-
-- Not all machines have an embedded OEM key.
-- The OEM key is usually tied to the original Windows edition shipped with the device.
-- If the current installed Windows edition does not match the OEM key edition, activation may fail.
-- With MAS HWID/Digital License activation, this tool cannot remove Microsoft server-side digital entitlement for the device hardware.
-- This function is read-only and does not activate Windows.
-- Product keys are sensitive. By default, the console and reports show a masked key like `XXXXX-XXXXX-XXXXX-XXXXX-ABCDE`.
-- Advanced PowerShell parameters are available: `-ReadOEMKeyOnly`, `-ShowFullKeys`, and `-ExportSensitiveKeys`. Use `-ExportSensitiveKeys` only when the generated report will be kept private.
-
-## Safety Notes
-
-- Close all Office apps before Office cleanup.
-- Windows key cleanup warns before running `slmgr /upk`.
-- A Windows Digital License / HWID entitlement is stored by Microsoft's activation service for the device hardware. This tool can remove local product keys and KMS/MAS configuration, but it does not remove a legitimate Microsoft digital license; after cleanup Windows may reactivate automatically when online.
-- Registry keys are exported before registry modification.
-- File/folder cleanup prefers rename-to-`.bak` unless a force mode is used manually.
-- The default menu does not install `PostRebootSweep`; that feature remains available only through explicit PowerShell parameters.
-- The tool does not clear Event Logs, Defender history, Prefetch, Amcache, ShimCache, SRUM, or other forensic artifacts.
-- The tool does not activate Windows/Office, install KMS emulators, or contact KMS/MAS servers.
-
-## Logs, Backups, Reports
-
-Default locations:
+Sau khi chạy, dữ liệu nằm tại:
 
 ```text
-C:\ProgramData\LegitActivationCleaner\Logs
-C:\ProgramData\LegitActivationCleaner\Backups
-C:\ProgramData\LegitActivationCleaner\Reports
+C:\ProgramData\LegitActivationCleaner
 ```
 
-The ProgramData folder name is kept for compatibility with earlier builds; the public tool name is `DeActive by MyPC`.
+Gồm:
 
-## Compatibility Target
+- Logs
+- Backups
+- Reports
 
-- Windows 10, Windows 11, Windows Server, LTSC, Enterprise editions where Windows PowerShell 5.1+ is available.
-- Office 2007 through Microsoft 365, including MSI and Click-to-Run where relevant local licensing components exist.
-- 32-bit and 64-bit Office paths.
+## Lưu ý về Digital License / HWID
 
-Unsupported or missing components are skipped with log entries instead of crashing.
+Nếu máy từng được active bằng MAS dạng HWID/Digital License, công cụ chỉ có thể dọn key và cấu hình local trên máy. Digital license đã gắn với phần cứng trên server Microsoft có thể vẫn khiến Windows tự kích hoạt lại khi online.
+
+Đây không phải lỗi của công cụ.
+
+## Lưu ý về key OEM theo main
+
+Một số máy có key Windows OEM được nhúng trong BIOS/UEFI. Key này thường chỉ dùng đúng phiên bản Windows gốc theo máy, ví dụ Home, Pro hoặc Home Single Language.
+
+Tính năng đọc key OEM chỉ đọc thông tin, không kích hoạt Windows và không thay đổi hệ thống.
+
+## Cam kết an toàn
+
+DeActive by MyPC:
+
+- Không kích hoạt lậu
+- Không bypass bản quyền
+- Không cài KMS
+- Không gọi server kích hoạt không chính thống
+- Không xóa Event Log hệ thống
+- Không xóa Defender history, Prefetch, Amcache, ShimCache, SRUM
+- Không gửi dữ liệu ra ngoài
+
+## File trong dự án
+
+- `DeActive-by-MyPC.bat` - launcher thương hiệu public.
+- `Clean-MAS-Activation.cmd` - menu chạy tool, hỗ trợ tiếng Việt/English.
+- `Clean-MAS-Activation.ps1` - script PowerShell chính.
+- `README.en.md` - tài liệu tiếng Anh.
+- `CHECKSUMS.sha256` - danh sách SHA256 của các file phát hành.
 
 ## SHA256
 
-```text
-Clean-MAS-Activation.ps1  B4567ECC3FBF5655B999D464B700BA5F2032154E65FD5CBF17DCB8DCA468EFEF
-Clean-MAS-Activation.cmd  8FFD65C68ACFA71470C3CFD00B8A7D0C66A8B495D36CD9D56662E9185F8DBDD2
-DeActive-by-MyPC.bat     6FD540C65395B12D3469427C7C33626EEF837DE93810C49A0359D36B84E61713
-README.md                See CHECKSUMS.sha256
-```
-
-`README.md` cannot contain its own final full-file SHA256 without changing that SHA256. The authoritative full-file checksum list, including `README.md`, is in `CHECKSUMS.sha256`.
+Checksum đầy đủ nằm trong `CHECKSUMS.sha256`.

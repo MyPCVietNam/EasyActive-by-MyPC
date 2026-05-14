@@ -1,4 +1,4 @@
-<# 
+﻿<# 
 .SYNOPSIS
     DeActive by MyPC - conservative cleanup for MAS/KMS-style activation artifacts.
 
@@ -34,14 +34,19 @@ param(
     [switch]$PostRebootSweep,
     [switch]$ReadOEMKeyOnly,
     [switch]$ShowFullKeys,
-    [switch]$ExportSensitiveKeys
+    [switch]$ExportSensitiveKeys,
+    [switch]$LauncherMenu,
+
+    [ValidateSet('vi', 'en')]
+    [string]$Language = 'vi'
 )
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
 $script:ToolName = 'DeActive by MyPC'
-$script:Version = '1.2.0'
+$script:Version = '1.3.0'
+$script:Language = $Language.ToLowerInvariant()
 $script:RunId = Get-Date -Format 'yyyyMMdd-HHmmss'
 $script:ProgramDataRoot = Join-Path $env:ProgramData 'LegitActivationCleaner'
 $script:LogRoot = Join-Path $script:ProgramDataRoot 'Logs'
@@ -83,6 +88,8 @@ $script:Report = [ordered]@{
         ReadOEMKeyOnly = [bool]$ReadOEMKeyOnly
         ShowFullKeys = [bool]$ShowFullKeys
         ExportSensitiveKeys = [bool]$ExportSensitiveKeys
+        LauncherMenu = [bool]$LauncherMenu
+        Language = $script:Language
     }
     OEMEmbeddedKeyInfo = [ordered]@{
         KeyFound = $false
@@ -223,6 +230,493 @@ function Write-Log {
     }
 }
 
+function Get-UiText {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Key
+    )
+
+    if ($script:Language -eq 'en') {
+        switch ($Key) {
+            'AdminRequired' { return 'Administrator rights are required. Start Windows PowerShell as Administrator and run this script again.' }
+            'PowerShellRequired' { return 'PowerShell 5.1 or later is required.' }
+            'DryRunActive' { return 'Dry-run/WhatIf mode is active. No system changes will be made.' }
+            'SensitiveExportWarning' { return 'Sensitive key export is enabled. Keep the report private.' }
+            'OfficeCloseWarning' { return 'Close all Microsoft Office apps before cleanup: Word, Excel, PowerPoint, Outlook, OneNote, Access, Publisher, Project, Visio, Teams/OneDrive Office file sessions, and any open Office setup/repair window.' }
+            'WindowsKeyRemovalWarning' { return 'Warning before Windows key removal: slmgr /upk will uninstall the installed Windows product key from the local licensing store. A valid digital license is not removed, but Windows may require activation refresh or a valid key afterward.' }
+            'OEMTitle' { return 'OEM embedded Windows product key' }
+            'OEMNoKey' { return 'No OEM embedded product key found in BIOS/UEFI.' }
+            'ProductKeyLabel' { return 'Product key' }
+            'KeyDescriptionLabel' { return 'Key description' }
+            'DetectedKeyEditionLabel' { return 'Detected key edition' }
+            'CurrentWindowsEditionLabel' { return 'Current Windows edition' }
+            'CompatibilityLabel' { return 'Compatibility' }
+            'Unknown' { return 'Unknown' }
+            'NextStepsHeading' { return 'Next steps' }
+            'ReportTitle' { return 'LegitActivationCleaner report' }
+            'ReportOEMHeading' { return 'OEM embedded key info:' }
+            'ReportActions' { return 'Actions' }
+            'ReportWarnings' { return 'Warnings' }
+            'ReportErrors' { return 'Errors' }
+            'ReportNextSteps' { return 'Next steps:' }
+            'OEMReadOnlyMode' { return 'Read-only OEM embedded key mode is active. Cleanup, restore point creation, product-key changes, activation commands, and service restarts are skipped.' }
+            'CompletedOEMRun' { return "Completed $script:ToolName read-only OEM embedded key run." }
+            'CompletedRun' { return "Completed $script:ToolName run." }
+            'StepPreflight' { return 'Pre-flight check' }
+            'StepReadOEM' { return 'Read OEM embedded key from BIOS/UEFI' }
+            'StepGenerateReport' { return 'Generate report' }
+            'StepShowNextSteps' { return 'Show next steps' }
+            'StepDetectArtifacts' { return 'Detect MAS/KMS artifacts' }
+            'StepRemoveScheduled' { return 'Remove scheduled tasks and MAS/KMS startup persistence' }
+            'StepClearWindows' { return 'Clear Windows licensing configuration' }
+            'StepClearOffice' { return 'Clear Office licensing configuration' }
+            'StepRemoveOfficeKeys' { return 'Remove Office product keys' }
+            'StepRemoveOhook' { return 'Remove Ohook artifacts' }
+            'StepRemoveOfficeCaches' { return 'Remove Office license caches' }
+            'StepRestartServices' { return 'Restart licensing services' }
+            'NoChangeOEMNextStep' { return 'No system changes were made by this read-only OEM embedded key check.' }
+            'OEMNotCompatibleNextStep' { return 'If compatibility is Not compatible, use a valid key for the current Windows edition or install the edition that matches the OEM key.' }
+            'DigitalLicenseNextStep' { return 'Digital License / HWID note: if this machine was activated through MAS HWID/Digital License, this tool can only clean local keys and local configuration. Microsoft server-side hardware entitlement may still reactivate Windows when online. This is not a tool error.' }
+            'SensitiveReportNextStep' { return 'Sensitive key export was enabled; keep generated reports private.' }
+            'RestartComputerNextStep' { return 'Restart the computer.' }
+            'WindowsActivationNextStep' { return 'For Windows retail/OEM/volume MAK: run slmgr /ipk XXXXX-XXXXX-XXXXX-XXXXX-XXXXX, then slmgr /ato, then slmgr /dlv.' }
+            'M365NextStep' { return 'For Microsoft 365 / Click-to-Run Office: open an Office app and sign in with a valid Microsoft/M365 account.' }
+            'OfficeVolumeNextStep' { return 'For valid Office volume/MSI licensing: use ospp.vbs /inpkey:XXXXX-XXXXX-XXXXX-XXXXX-XXXXX, then follow your organization activation process.' }
+            'OfficeRepairNextStep' { return 'If Office reports licensing errors, run Apps & Features > Microsoft 365 / Office > Modify > Quick Repair.' }
+            default { return $Key }
+        }
+    }
+
+    switch ($Key) {
+        'AdminRequired' { return 'Cần chạy bằng quyền Administrator. Hãy mở Windows PowerShell bằng Run as administrator rồi chạy lại script.' }
+        'PowerShellRequired' { return 'Cần Windows PowerShell 5.1 trở lên.' }
+        'DryRunActive' { return 'Đang chạy chế độ kiểm tra thử/Dry-run. Không có thay đổi nào được thực hiện trên hệ thống.' }
+        'SensitiveExportWarning' { return 'Đang bật xuất key nhạy cảm. Hãy giữ report ở nơi riêng tư.' }
+        'OfficeCloseWarning' { return 'LƯU Ý: Hãy đóng toàn bộ Word, Excel, PowerPoint, Outlook và các ứng dụng Office trước khi tiếp tục. Nếu Office đang mở, một số file license/cache có thể không xử lý được.' }
+        'WindowsKeyRemovalWarning' { return 'CẢNH BÁO: slmgr /upk sẽ gỡ product key Windows đang lưu trong licensing store local. Digital License hợp lệ không bị xóa, nhưng Windows có thể cần refresh kích hoạt hoặc nhập key hợp lệ sau khi dọn.' }
+        'OEMTitle' { return 'Key Windows OEM nhúng trong BIOS/UEFI' }
+        'OEMNoKey' { return 'Không tìm thấy key Windows OEM trong BIOS/UEFI.' }
+        'ProductKeyLabel' { return 'Product key' }
+        'KeyDescriptionLabel' { return 'Mô tả key' }
+        'DetectedKeyEditionLabel' { return 'Phiên bản suy đoán từ key' }
+        'CurrentWindowsEditionLabel' { return 'Phiên bản Windows đang cài' }
+        'CompatibilityLabel' { return 'Mức tương thích' }
+        'Unknown' { return 'Không xác định' }
+        'NextStepsHeading' { return 'Bước tiếp theo' }
+        'ReportTitle' { return 'Báo cáo LegitActivationCleaner' }
+        'ReportOEMHeading' { return 'Thông tin key OEM nhúng:' }
+        'ReportActions' { return 'Thao tác' }
+        'ReportWarnings' { return 'Cảnh báo' }
+        'ReportErrors' { return 'Lỗi' }
+        'ReportNextSteps' { return 'Bước tiếp theo:' }
+        'OEMReadOnlyMode' { return 'Đang chạy chế độ chỉ đọc key OEM. Bỏ qua dọn dẹp, tạo restore point, thay đổi product key, lệnh kích hoạt và restart dịch vụ.' }
+        'CompletedOEMRun' { return "Hoàn tất lượt đọc key OEM chỉ đọc của $script:ToolName." }
+        'CompletedRun' { return "Hoàn tất lượt chạy $script:ToolName." }
+        'StepPreflight' { return 'Kiểm tra ban đầu' }
+        'StepReadOEM' { return 'Đọc key OEM từ BIOS/UEFI' }
+        'StepGenerateReport' { return 'Tạo báo cáo' }
+        'StepShowNextSteps' { return 'Hiển thị bước tiếp theo' }
+        'StepDetectArtifacts' { return 'Dò dấu vết MAS/KMS' }
+        'StepRemoveScheduled' { return 'Xóa lịch tự kích hoạt và cơ chế tự chạy MAS/KMS' }
+        'StepClearWindows' { return 'Dọn cấu hình kích hoạt Windows' }
+        'StepClearOffice' { return 'Dọn cấu hình kích hoạt Office' }
+        'StepRemoveOfficeKeys' { return 'Gỡ product key Office' }
+        'StepRemoveOhook' { return 'Gỡ dấu vết Ohook' }
+        'StepRemoveOfficeCaches' { return 'Dọn cache license Office' }
+        'StepRestartServices' { return 'Restart dịch vụ licensing' }
+        'NoChangeOEMNextStep' { return 'Tính năng đọc key OEM chỉ đọc thông tin, không kích hoạt Windows và không thay đổi hệ thống.' }
+        'OEMNotCompatibleNextStep' { return 'Nếu kết quả là Not compatible, hãy dùng key hợp lệ cho đúng phiên bản Windows đang cài hoặc cài phiên bản Windows khớp với key OEM.' }
+        'DigitalLicenseNextStep' { return 'LƯU Ý VỀ DIGITAL LICENSE / HWID: Nếu máy từng được active bằng MAS dạng HWID/Digital License, công cụ chỉ có thể dọn key và cấu hình local trên máy. Digital license đã gắn với phần cứng trên server Microsoft có thể vẫn khiến Windows tự kích hoạt lại khi online. Đây không phải lỗi của công cụ.' }
+        'SensitiveReportNextStep' { return 'Đã bật xuất key nhạy cảm; hãy giữ các report được tạo ở nơi riêng tư.' }
+        'RestartComputerNextStep' { return 'Restart máy tính.' }
+        'WindowsActivationNextStep' { return 'Với Windows retail/OEM/volume MAK: chạy slmgr /ipk XXXXX-XXXXX-XXXXX-XXXXX-XXXXX, sau đó slmgr /ato, rồi slmgr /dlv.' }
+        'M365NextStep' { return 'Với Microsoft 365 / Office Click-to-Run: mở ứng dụng Office và đăng nhập tài khoản Microsoft/Microsoft 365 hợp lệ.' }
+        'OfficeVolumeNextStep' { return 'Với Office volume/MSI hợp lệ: dùng ospp.vbs /inpkey:XXXXX-XXXXX-XXXXX-XXXXX-XXXXX, sau đó kích hoạt theo quy trình của tổ chức.' }
+        'OfficeRepairNextStep' { return 'Nếu Office báo lỗi license, vào Apps & Features > Microsoft 365 / Office > Modify > Quick Repair.' }
+        default { return $Key }
+    }
+}
+
+function Get-DigitalLicenseNoteLines {
+    [CmdletBinding()]
+    param()
+
+    if ($script:Language -eq 'en') {
+        return @(
+            'DIGITAL LICENSE / HWID NOTE:',
+            'If this machine was activated through MAS HWID/Digital License, this tool can only clean',
+            'local keys and local configuration. Microsoft server-side hardware entitlement may still',
+            'reactivate Windows when online.',
+            'This is not a tool error.'
+        )
+    }
+
+    return @(
+        'LƯU Ý VỀ DIGITAL LICENSE / HWID:',
+        'Nếu máy từng được active bằng MAS dạng HWID/Digital License, công cụ chỉ có thể dọn key',
+        'và cấu hình local trên máy. Digital license đã gắn với phần cứng trên server Microsoft',
+        'có thể vẫn khiến Windows tự kích hoạt lại khi online.',
+        'Đây không phải lỗi của công cụ.'
+    )
+}
+
+function Get-OEMKeyNoteLines {
+    [CmdletBinding()]
+    param()
+
+    if ($script:Language -eq 'en') {
+        return @(
+            'OEM MOTHERBOARD KEY NOTE:',
+            'Some machines have a Windows OEM key embedded in BIOS/UEFI.',
+            'This key usually matches only the original Windows edition shipped with the device,',
+            'for example Home, Pro, or Home Single Language.',
+            'OEM key reading is read-only. It does not activate Windows or modify the system.'
+        )
+    }
+
+    return @(
+        'LƯU Ý VỀ KEY OEM THEO MAIN:',
+        'Một số máy có key Windows OEM được nhúng trong BIOS/UEFI.',
+        'Key này thường chỉ dùng đúng phiên bản Windows gốc theo máy, ví dụ Home, Pro hoặc Home Single Language.',
+        'Tính năng đọc key OEM chỉ đọc thông tin, không kích hoạt Windows và không thay đổi hệ thống.'
+    )
+}
+
+function Write-NoteBlock {
+    [CmdletBinding()]
+    param(
+        [string[]]$Lines
+    )
+
+    Write-Host ''
+    foreach ($line in @($Lines)) {
+        Write-Host $line -ForegroundColor Yellow
+        if ($script:LogPath) {
+            $logLine = '{0} [INFO] {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $line
+            try {
+                Add-Content -LiteralPath $script:LogPath -Value $logLine -Encoding UTF8
+            } catch {
+                Write-Host "Failed to write log file: $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+        }
+    }
+}
+
+function Read-ChoiceWithTimeout {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Prompt,
+
+        [Parameter(Mandatory = $true)]
+        [string[]]$ValidChoices,
+
+        [Parameter(Mandatory = $true)]
+        [string]$DefaultChoice,
+
+        [int]$TimeoutSeconds = 10
+    )
+
+    Write-Host $Prompt -NoNewline
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            if ([Console]::KeyAvailable) {
+                $key = [Console]::ReadKey($true)
+                $value = [string]$key.KeyChar
+                if ($ValidChoices -contains $value) {
+                    Write-Host $value
+                    return $value
+                }
+                if ($key.Key -eq [ConsoleKey]::Enter) {
+                    Write-Host ''
+                    return $DefaultChoice
+                }
+            }
+        } catch {
+            Write-Host ''
+            return $DefaultChoice
+        }
+        Start-Sleep -Milliseconds 150
+    }
+
+    Write-Host ''
+    return $DefaultChoice
+}
+
+function Sync-ReportParameterSnapshot {
+    [CmdletBinding()]
+    param()
+
+    $script:DryRunMode = [bool]($DryRun -or $WhatIfPreference)
+    $script:Report.DryRun = $script:DryRunMode
+    $script:Report.Force = [bool]$Force
+    $script:Report.Parameters.CreateRestorePoint = [bool]$CreateRestorePoint
+    $script:Report.Parameters.SkipOffice = [bool]$SkipOffice
+    $script:Report.Parameters.SkipWindows = [bool]$SkipWindows
+    $script:Report.Parameters.SkipOhookCleanup = [bool]$SkipOhookCleanup
+    $script:Report.Parameters.VerboseLog = [bool]$VerboseLog
+    $script:Report.Parameters.ExportReport = [bool]$ExportReport
+    $script:Report.Parameters.Force = [bool]$Force
+    $script:Report.Parameters.NoRestartServices = [bool]$NoRestartServices
+    $script:Report.Parameters.ForceWindowsProductKeyRemoval = [bool]$ForceWindowsProductKeyRemoval
+    $script:Report.Parameters.InstallPostRebootSweep = [bool]$InstallPostRebootSweep
+    $script:Report.Parameters.PostRebootSweep = [bool]$PostRebootSweep
+    $script:Report.Parameters.ReadOEMKeyOnly = [bool]$ReadOEMKeyOnly
+    $script:Report.Parameters.ShowFullKeys = [bool]$ShowFullKeys
+    $script:Report.Parameters.ExportSensitiveKeys = [bool]$ExportSensitiveKeys
+    $script:Report.Parameters.LauncherMenu = [bool]$LauncherMenu
+    $script:Report.Parameters.Language = $script:Language
+}
+
+function Reset-LauncherRunOptions {
+    [CmdletBinding()]
+    param()
+
+    foreach ($name in @(
+        'DryRun',
+        'CreateRestorePoint',
+        'SkipOffice',
+        'SkipWindows',
+        'SkipOhookCleanup',
+        'VerboseLog',
+        'ExportReport',
+        'Force',
+        'NoRestartServices',
+        'ForceWindowsProductKeyRemoval',
+        'InstallPostRebootSweep',
+        'PostRebootSweep',
+        'ReadOEMKeyOnly',
+        'ShowFullKeys',
+        'ExportSensitiveKeys'
+    )) {
+        Set-Variable -Name $name -Scope Script -Value $false
+    }
+}
+
+function Set-LauncherRunOption {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+
+        [bool]$Value = $true
+    )
+
+    Set-Variable -Name $Name -Scope Script -Value $Value
+}
+
+function Show-LauncherLanguageSelection {
+    [CmdletBinding()]
+    param()
+
+    Clear-Host
+    Write-Host '========================================' -ForegroundColor Cyan
+    Write-Host ("        {0} v{1}" -f $script:ToolName, $script:Version) -ForegroundColor Cyan
+    Write-Host '========================================' -ForegroundColor Cyan
+    Write-Host ''
+    Write-Host 'Chọn ngôn ngữ / Select language:'
+    Write-Host ''
+    Write-Host '  1. Tiếng Việt'
+    Write-Host '  2. English'
+    Write-Host ''
+
+    $choice = Read-ChoiceWithTimeout -Prompt 'Nhập lựa chọn [1-2], mặc định 1 sau 10 giây: ' -ValidChoices @('1', '2') -DefaultChoice '1' -TimeoutSeconds 10
+    if ($choice -eq '2') {
+        $script:Language = 'en'
+    } else {
+        $script:Language = 'vi'
+    }
+    Set-Variable -Name Language -Scope Script -Value $script:Language
+}
+
+function Show-LauncherMenuVI {
+    [CmdletBinding()]
+    param()
+
+    Clear-Host
+    Write-Host '========================================' -ForegroundColor Cyan
+    Write-Host ("        DeActive by MyPC v{0}" -f $script:Version) -ForegroundColor Cyan
+    Write-Host '  Dọn trạng thái kích hoạt Windows/Office' -ForegroundColor Cyan
+    Write-Host '========================================' -ForegroundColor Cyan
+    Write-Host ''
+    Write-Host 'Chọn tác vụ:'
+    Write-Host ''
+    Write-Host '1. Kiểm tra thử, không thay đổi hệ thống'
+    Write-Host '2. Dọn cả Windows và Office'
+    Write-Host '3. Chỉ dọn Office'
+    Write-Host '4. Chỉ dọn Windows'
+    Write-Host '5. Đọc key Windows OEM đi theo main / BIOS / UEFI'
+    Write-Host '6. Mở thư mục log và báo cáo'
+    Write-Host '0. Thoát'
+    Write-Host ''
+    Write-Host 'Giải thích nhanh:' -ForegroundColor Yellow
+    Write-Host '1 = Chỉ quét và tạo báo cáo, không xóa/sửa gì.'
+    Write-Host '2 = Dọn key/cấu hình kích hoạt cũ của cả Windows và Office.'
+    Write-Host '3 = Chỉ dọn Office, không ảnh hưởng Windows.'
+    Write-Host '4 = Chỉ dọn Windows, không ảnh hưởng Office.'
+    Write-Host '5 = Chỉ đọc key OEM, không kích hoạt, không thay đổi máy.'
+    Write-Host ''
+}
+
+function Show-LauncherMenuEN {
+    [CmdletBinding()]
+    param()
+
+    Clear-Host
+    Write-Host '================================================' -ForegroundColor Cyan
+    Write-Host ("        DeActive by MyPC v{0}" -f $script:Version) -ForegroundColor Cyan
+    Write-Host '  Windows/Office activation cleanup' -ForegroundColor Cyan
+    Write-Host '================================================' -ForegroundColor Cyan
+    Write-Host ''
+    Write-Host 'Choose a task:'
+    Write-Host ''
+    Write-Host '1. Dry-run only, no system changes'
+    Write-Host '2. Clean both Windows and Office'
+    Write-Host '3. Clean Office only'
+    Write-Host '4. Clean Windows only'
+    Write-Host '5. Read OEM embedded key from motherboard / BIOS / UEFI'
+    Write-Host '6. Open logs and reports folder'
+    Write-Host '0. Exit'
+    Write-Host ''
+}
+
+function Confirm-OfficeAppsClosedFromLauncher {
+    [CmdletBinding()]
+    param()
+
+    Write-Host ''
+    if ($script:Language -eq 'en') {
+        Write-Host 'NOTE:' -ForegroundColor Yellow
+        Write-Host 'Close all Word, Excel, PowerPoint, Outlook, and other Office apps before continuing.' -ForegroundColor Yellow
+        Write-Host 'If Office is open, some license/cache files may not be processed.' -ForegroundColor Yellow
+        Write-Host ''
+        $answer = Read-Host 'Have you closed all Office apps? (Y/N)'
+    } else {
+        Write-Host 'LƯU Ý:' -ForegroundColor Yellow
+        Write-Host 'Hãy đóng toàn bộ Word, Excel, PowerPoint, Outlook và các ứng dụng Office trước khi tiếp tục.' -ForegroundColor Yellow
+        Write-Host 'Nếu Office đang mở, một số file license/cache có thể không xử lý được.' -ForegroundColor Yellow
+        Write-Host ''
+        $answer = Read-Host 'Bạn đã đóng toàn bộ ứng dụng Office chưa? (Y/N)'
+    }
+
+    return ($answer -match '^(?i)y$')
+}
+
+function Confirm-WindowsKeyRemovalFromLauncher {
+    [CmdletBinding()]
+    param()
+
+    Write-Host ''
+    if ($script:Language -eq 'en') {
+        Write-Host 'WARNING:' -ForegroundColor Yellow
+        Write-Host 'This option may remove the Windows product key currently stored on this machine.' -ForegroundColor Yellow
+        Write-Host ''
+        Write-Host 'After cleanup, if the machine does not have a valid Digital License or a new genuine key,' -ForegroundColor Yellow
+        Write-Host 'Windows may show as not activated.' -ForegroundColor Yellow
+        Write-Host ''
+        Write-Host 'Continue only if you understand this action and have a valid key/account for reactivation.' -ForegroundColor Yellow
+        Write-Host ''
+        $answer = Read-Host 'Do you want to continue? (Y/N)'
+    } else {
+        Write-Host 'CẢNH BÁO:' -ForegroundColor Yellow
+        Write-Host 'Tùy chọn này có thể gỡ product key Windows đang lưu trên máy.' -ForegroundColor Yellow
+        Write-Host ''
+        Write-Host 'Sau khi dọn, nếu máy không có Digital License hợp lệ hoặc chưa nhập key bản quyền mới,' -ForegroundColor Yellow
+        Write-Host 'Windows có thể hiển thị trạng thái chưa kích hoạt.' -ForegroundColor Yellow
+        Write-Host ''
+        Write-Host 'Chỉ tiếp tục nếu bạn đã hiểu thao tác này và có key/tài khoản bản quyền hợp lệ để kích hoạt lại.' -ForegroundColor Yellow
+        Write-Host ''
+        $answer = Read-Host 'Bạn có muốn tiếp tục không? (Y/N)'
+    }
+
+    return ($answer -match '^(?i)y$')
+}
+
+function Open-LogFolderFromLauncher {
+    [CmdletBinding()]
+    param()
+
+    if (-not (Test-Path -LiteralPath $script:ProgramDataRoot)) {
+        New-Item -Path $script:ProgramDataRoot -ItemType Directory -Force | Out-Null
+    }
+    Start-Process -FilePath 'explorer.exe' -ArgumentList $script:ProgramDataRoot
+}
+
+function Invoke-LauncherMenu {
+    [CmdletBinding()]
+    param()
+
+    Show-LauncherLanguageSelection
+
+    while ($true) {
+        if ($script:Language -eq 'en') {
+            Show-LauncherMenuEN
+            $choice = Read-Host 'Enter choice [0-6]'
+        } else {
+            Show-LauncherMenuVI
+            $choice = Read-Host 'Nhập lựa chọn [0-6]'
+        }
+
+        Reset-LauncherRunOptions
+        Set-LauncherRunOption -Name 'VerboseLog' -Value $true
+        Set-LauncherRunOption -Name 'ExportReport' -Value $true
+
+        switch ($choice) {
+            '1' {
+                Set-LauncherRunOption -Name 'DryRun'
+                Set-LauncherRunOption -Name 'CreateRestorePoint'
+                Sync-ReportParameterSnapshot
+                return $true
+            }
+            '2' {
+                if (-not (Confirm-OfficeAppsClosedFromLauncher)) { continue }
+                if (-not (Confirm-WindowsKeyRemovalFromLauncher)) { continue }
+                Set-LauncherRunOption -Name 'CreateRestorePoint'
+                Set-LauncherRunOption -Name 'ForceWindowsProductKeyRemoval'
+                Sync-ReportParameterSnapshot
+                return $true
+            }
+            '3' {
+                if (-not (Confirm-OfficeAppsClosedFromLauncher)) { continue }
+                Set-LauncherRunOption -Name 'CreateRestorePoint'
+                Set-LauncherRunOption -Name 'SkipWindows'
+                Sync-ReportParameterSnapshot
+                return $true
+            }
+            '4' {
+                if (-not (Confirm-WindowsKeyRemovalFromLauncher)) { continue }
+                Set-LauncherRunOption -Name 'CreateRestorePoint'
+                Set-LauncherRunOption -Name 'SkipOffice'
+                Set-LauncherRunOption -Name 'ForceWindowsProductKeyRemoval'
+                Sync-ReportParameterSnapshot
+                return $true
+            }
+            '5' {
+                Set-LauncherRunOption -Name 'ReadOEMKeyOnly'
+                Sync-ReportParameterSnapshot
+                return $true
+            }
+            '6' {
+                Open-LogFolderFromLauncher
+                continue
+            }
+            '0' {
+                return $false
+            }
+            default {
+                if ($script:Language -eq 'en') {
+                    Write-Host 'Invalid choice.' -ForegroundColor Yellow
+                } else {
+                    Write-Host 'Lựa chọn không hợp lệ.' -ForegroundColor Yellow
+                }
+                Start-Sleep -Seconds 1
+            }
+        }
+    }
+}
+
 function Write-Step {
     [CmdletBinding()]
     param(
@@ -244,9 +738,9 @@ function Show-OfficeCloseWarning {
         return
     }
 
-    $message = 'Close all Microsoft Office apps before cleanup: Word, Excel, PowerPoint, Outlook, OneNote, Access, Publisher, Project, Visio, Teams/OneDrive Office file sessions, and any open Office setup/repair window.'
+    $message = Get-UiText -Key 'OfficeCloseWarning'
     Write-Host ''
-    Write-Host "WARNING: $message" -ForegroundColor Yellow
+    Write-Host $message -ForegroundColor Yellow
     Write-Log -Message $message -Level 'WARN'
 }
 
@@ -927,7 +1421,7 @@ function Get-OEMEmbeddedProductKey {
         $maskedKey = $null
         $detectedEdition = 'Unknown'
         $compatibility = 'Unknown'
-        $null = $notes.Add('No OEM embedded product key found in BIOS/UEFI.')
+        $null = $notes.Add((Get-UiText -Key 'OEMNoKey'))
     }
 
     if ([string]::IsNullOrWhiteSpace($description)) {
@@ -958,30 +1452,31 @@ function Get-OEMEmbeddedProductKey {
 
     $script:Report.OEMEmbeddedKeyInfo = $info
 
+    Write-NoteBlock -Lines (Get-OEMKeyNoteLines)
     Write-Host ''
-    Write-Host 'OEM embedded Windows product key' -ForegroundColor Cyan
+    Write-Host (Get-UiText -Key 'OEMTitle') -ForegroundColor Cyan
     if (-not $keyFound) {
-        Write-Host 'No OEM embedded product key found in BIOS/UEFI.' -ForegroundColor Yellow
-        Write-Log -Message 'No OEM embedded product key found in BIOS/UEFI.' -Level 'INFO'
+        Write-Host (Get-UiText -Key 'OEMNoKey') -ForegroundColor Yellow
+        Write-Log -Message (Get-UiText -Key 'OEMNoKey') -Level 'INFO'
     } else {
         if ($ExportSensitiveKeys) {
-            Write-Host 'WARNING: Sensitive key export is enabled. Keep the report private.' -ForegroundColor Yellow
-            Write-Log -Message 'WARNING: Sensitive key export is enabled. Keep the report private.' -Level 'INFO'
+            Write-Host (Get-UiText -Key 'SensitiveExportWarning') -ForegroundColor Yellow
+            Write-Log -Message (Get-UiText -Key 'SensitiveExportWarning') -Level 'INFO'
         }
 
         if ($ShowFullKeys) {
-            Write-Host ("Product key: {0}" -f $key) -ForegroundColor Yellow
+            Write-Host ("{0}: {1}" -f (Get-UiText -Key 'ProductKeyLabel'), $key) -ForegroundColor Yellow
             Write-Log -Message ("OEM embedded product key found: {0}. Full key was shown on console only." -f $maskedKey) -Level 'INFO'
         } else {
-            Write-Host ("Product key: {0}" -f $maskedKey) -ForegroundColor Gray
+            Write-Host ("{0}: {1}" -f (Get-UiText -Key 'ProductKeyLabel'), $maskedKey) -ForegroundColor Gray
             Write-Log -Message ("OEM embedded product key found: {0}" -f $maskedKey) -Level 'INFO'
         }
     }
 
-    Write-Host ("Key description: {0}" -f $(if ([string]::IsNullOrWhiteSpace($description)) { 'Unknown' } else { $description })) -ForegroundColor Gray
-    Write-Host ("Detected key edition: {0}" -f $detectedEdition) -ForegroundColor Gray
-    Write-Host ("Current Windows edition: {0}" -f $currentEdition.FriendlyName) -ForegroundColor Gray
-    Write-Host ("Compatibility: {0}" -f $compatibility) -ForegroundColor Gray
+    Write-Host ("{0}: {1}" -f (Get-UiText -Key 'KeyDescriptionLabel'), $(if ([string]::IsNullOrWhiteSpace($description)) { Get-UiText -Key 'Unknown' } else { $description })) -ForegroundColor Gray
+    Write-Host ("{0}: {1}" -f (Get-UiText -Key 'DetectedKeyEditionLabel'), $detectedEdition) -ForegroundColor Gray
+    Write-Host ("{0}: {1}" -f (Get-UiText -Key 'CurrentWindowsEditionLabel'), $currentEdition.FriendlyName) -ForegroundColor Gray
+    Write-Host ("{0}: {1}" -f (Get-UiText -Key 'CompatibilityLabel'), $compatibility) -ForegroundColor Gray
 
     foreach ($note in @($notes)) {
         Write-Log -Message ("OEM key note: {0}" -f $note) -Level 'INFO'
@@ -1949,7 +2444,7 @@ function Clear-WindowsProductKey {
     $looksKms = Test-WindowsActivationLooksKms -ActivationState $ActivationStateBefore
     if ($looksKms -or $Force -or $ForceWindowsProductKeyRemoval) {
         if (-not $script:DryRunMode) {
-            Write-Log -Message 'Warning before Windows key removal: slmgr /upk will uninstall the installed Windows product key from the local licensing store. A valid digital license is not removed, but Windows may require activation refresh or a valid key afterward.' -Level 'WARN'
+            Write-Log -Message (Get-UiText -Key 'WindowsKeyRemovalWarning') -Level 'WARN'
         }
         Invoke-ExternalCommandSafe -FilePath $cscript -Arguments @('//NoLogo', $slmgr, '/upk') -Description 'Uninstall Windows product key with slmgr /upk' -Category 'WindowsLicensing' -Target 'slmgr /upk' -AllowFailure | Out-Null
     } else {
@@ -2782,7 +3277,7 @@ function New-PlainTextReport {
     param()
 
     $lines = New-Object System.Collections.ArrayList
-    $null = $lines.Add('LegitActivationCleaner report')
+    $null = $lines.Add((Get-UiText -Key 'ReportTitle'))
     $null = $lines.Add(('RunId: {0}' -f $script:Report.RunId))
     $null = $lines.Add(('StartTime: {0}' -f $script:Report.StartTime))
     $null = $lines.Add(('EndTime: {0}' -f $script:Report.EndTime))
@@ -2794,7 +3289,7 @@ function New-PlainTextReport {
         $null = $lines.Add(('  {0}: {1}' -f $key, $script:Report.OS[$key]))
     }
     $null = $lines.Add('')
-    $null = $lines.Add('OEM embedded key info:')
+    $null = $lines.Add((Get-UiText -Key 'ReportOEMHeading'))
     foreach ($key in $script:Report.OEMEmbeddedKeyInfo.Keys) {
         $value = $script:Report.OEMEmbeddedKeyInfo[$key]
         if ($value -is [System.Collections.IEnumerable] -and -not ($value -is [string])) {
@@ -2803,11 +3298,15 @@ function New-PlainTextReport {
         $null = $lines.Add(('  {0}: {1}' -f $key, $value))
     }
     $null = $lines.Add('')
-    $null = $lines.Add(('Actions: {0}' -f $script:Report.Actions.Count))
-    $null = $lines.Add(('Warnings: {0}' -f $script:Report.Warnings.Count))
-    $null = $lines.Add(('Errors: {0}' -f $script:Report.Errors.Count))
+    foreach ($line in (Get-DigitalLicenseNoteLines)) {
+        $null = $lines.Add($line)
+    }
     $null = $lines.Add('')
-    $null = $lines.Add('Next steps:')
+    $null = $lines.Add(('{0}: {1}' -f (Get-UiText -Key 'ReportActions'), $script:Report.Actions.Count))
+    $null = $lines.Add(('{0}: {1}' -f (Get-UiText -Key 'ReportWarnings'), $script:Report.Warnings.Count))
+    $null = $lines.Add(('{0}: {1}' -f (Get-UiText -Key 'ReportErrors'), $script:Report.Errors.Count))
+    $null = $lines.Add('')
+    $null = $lines.Add((Get-UiText -Key 'ReportNextSteps'))
     foreach ($step in $script:Report.NextSteps) {
         $null = $lines.Add(('  - {0}' -f $step))
     }
@@ -2858,7 +3357,8 @@ function Show-NextSteps {
 
     Ensure-NextSteps
     Write-Host ''
-    Write-Host 'Next steps' -ForegroundColor Cyan
+    Write-Host (Get-UiText -Key 'NextStepsHeading') -ForegroundColor Cyan
+    Write-NoteBlock -Lines (Get-DigitalLicenseNoteLines)
     foreach ($step in $script:Report.NextSteps) {
         Write-Host " - $step" -ForegroundColor Gray
         Write-Log -Message "Next step: $step" -Level 'INFO'
@@ -2874,11 +3374,11 @@ function Ensure-NextSteps {
     }
 
     $steps = @(
-        'Restart the computer.',
-        'For Windows retail/OEM/volume MAK: run slmgr /ipk XXXXX-XXXXX-XXXXX-XXXXX-XXXXX, then slmgr /ato, then slmgr /dlv.',
-        'For Microsoft 365 / Click-to-Run Office: open an Office app and sign in with a valid Microsoft/M365 account.',
-        'For valid Office volume/MSI licensing: use ospp.vbs /inpkey:XXXXX-XXXXX-XXXXX-XXXXX-XXXXX, then follow your organization activation process.',
-        'If Office reports licensing errors, run Apps & Features > Microsoft 365 / Office > Modify > Quick Repair.'
+        (Get-UiText -Key 'RestartComputerNextStep'),
+        (Get-UiText -Key 'WindowsActivationNextStep'),
+        (Get-UiText -Key 'M365NextStep'),
+        (Get-UiText -Key 'OfficeVolumeNextStep'),
+        (Get-UiText -Key 'OfficeRepairNextStep')
     )
 
     foreach ($step in $steps) {
@@ -2915,73 +3415,81 @@ function Invoke-Main {
     param()
 
     if ($PSVersionTable.PSVersion.Major -lt 5) {
-        Write-Host 'PowerShell 5.1 or later is required.' -ForegroundColor Red
+        Write-Host (Get-UiText -Key 'PowerShellRequired') -ForegroundColor Red
         exit 2
     }
 
     if (-not (Test-IsAdministrator)) {
-        Write-Host 'Administrator rights are required. Start Windows PowerShell as Administrator and run this script again.' -ForegroundColor Red
+        Write-Host (Get-UiText -Key 'AdminRequired') -ForegroundColor Red
         exit 1
+    }
+
+    if ($LauncherMenu) {
+        $shouldRun = Invoke-LauncherMenu
+        if (-not $shouldRun) {
+            return
+        }
+    } else {
+        Sync-ReportParameterSnapshot
     }
 
     Initialize-RunStorage
     Write-Log -Message "Started $script:ToolName $script:Version run $script:RunId" -Level 'INFO'
     Write-Log -Message "Log file: $script:LogPath" -Level 'INFO'
     if ($script:DryRunMode) {
-        Write-Log -Message 'Dry-run/WhatIf mode is active. No system changes will be made.' -Level 'INFO'
+        Write-Log -Message (Get-UiText -Key 'DryRunActive') -Level 'INFO'
     }
     if ($ExportSensitiveKeys) {
-        Write-Host 'WARNING: Sensitive key export is enabled. Keep the report private.' -ForegroundColor Yellow
-        Write-Log -Message 'WARNING: Sensitive key export is enabled. Keep the report private.' -Level 'INFO'
+        Write-Host (Get-UiText -Key 'SensitiveExportWarning') -ForegroundColor Yellow
+        Write-Log -Message (Get-UiText -Key 'SensitiveExportWarning') -Level 'INFO'
     }
 
     if ($ReadOEMKeyOnly) {
-        Write-Step -Number 1 -Name 'Pre-flight check'
+        Write-Step -Number 1 -Name (Get-UiText -Key 'StepPreflight')
         $script:Report.OS = Get-WindowsOSInfo
-        Write-Log -Message 'Read-only OEM embedded key mode is active. Cleanup, restore point creation, product-key changes, activation commands, and service restarts are skipped.' -Level 'INFO'
+        Write-Log -Message (Get-UiText -Key 'OEMReadOnlyMode') -Level 'INFO'
 
-        Write-Step -Number 2 -Name 'Read OEM embedded key from BIOS/UEFI'
+        Write-Step -Number 2 -Name (Get-UiText -Key 'StepReadOEM')
         Get-OEMEmbeddedProductKey | Out-Null
 
         $script:Report.NextSteps.Clear()
-        $null = $script:Report.NextSteps.Add('No system changes were made by this read-only OEM embedded key check.')
-        $null = $script:Report.NextSteps.Add('If compatibility is Not compatible, use a valid key for the current Windows edition or install the edition that matches the OEM key.')
-        $null = $script:Report.NextSteps.Add('This tool does not remove Microsoft server-side Digital License/HWID entitlement and does not activate Windows.')
+        $null = $script:Report.NextSteps.Add((Get-UiText -Key 'NoChangeOEMNextStep'))
+        $null = $script:Report.NextSteps.Add((Get-UiText -Key 'OEMNotCompatibleNextStep'))
         if ($ExportSensitiveKeys) {
-            $null = $script:Report.NextSteps.Add('Sensitive key export was enabled; keep generated reports private.')
+            $null = $script:Report.NextSteps.Add((Get-UiText -Key 'SensitiveReportNextStep'))
         }
 
-        Write-Step -Number 3 -Name 'Generate report'
+        Write-Step -Number 3 -Name (Get-UiText -Key 'StepGenerateReport')
         Generate-ActivationReport
 
-        Write-Step -Number 4 -Name 'Show next steps'
+        Write-Step -Number 4 -Name (Get-UiText -Key 'StepShowNextSteps')
         Show-NextSteps
 
-        Write-Log -Message "Completed $script:ToolName read-only OEM embedded key run." -Level 'SUCCESS'
+        Write-Log -Message (Get-UiText -Key 'CompletedOEMRun') -Level 'SUCCESS'
         return
     }
 
-    Write-Step -Number 1 -Name 'Pre-flight check'
+    Write-Step -Number 1 -Name (Get-UiText -Key 'StepPreflight')
     Show-OfficeCloseWarning
     $script:Report.OS = Get-WindowsOSInfo
     $script:Report.WindowsActivationBefore = @(Get-WindowsActivationState)
     New-SystemRestorePointSafe
 
-    Write-Step -Number 2 -Name 'Detect MAS/KMS artifacts'
+    Write-Step -Number 2 -Name (Get-UiText -Key 'StepDetectArtifacts')
     $script:DetectedScheduledTasks = @(Get-MASScheduledTaskCandidates)
     $script:DetectedMASFileArtifacts = @(Get-MASFileCandidates)
     $script:DetectedOhookArtifacts = @(Get-OhookCandidates)
     Add-DetectedArtifactReportItems
     Write-Log -Message ("Detected {0} task(s), {1} file/folder artifact(s), {2} Office DLL observation(s)." -f $script:DetectedScheduledTasks.Count, $script:DetectedMASFileArtifacts.Count, $script:DetectedOhookArtifacts.Count) -Level 'INFO'
 
-    Write-Step -Number 3 -Name 'Remove scheduled tasks and MAS/KMS startup persistence'
+    Write-Step -Number 3 -Name (Get-UiText -Key 'StepRemoveScheduled')
     Remove-ScheduledTasksRelatedToMAS
     Remove-RunEntriesRelatedToMAS
     Remove-StartupFolderItemsRelatedToMAS
     Remove-ServicesRelatedToMAS
     Remove-MASFilesAndFolders
 
-    Write-Step -Number 4 -Name 'Clear Windows licensing configuration'
+    Write-Step -Number 4 -Name (Get-UiText -Key 'StepClearWindows')
     if ($SkipWindows) {
         Write-Log -Message 'Windows licensing cleanup skipped because -SkipWindows was specified.' -Level 'INFO'
     } else {
@@ -2989,35 +3497,35 @@ function Invoke-Main {
         Clear-WindowsProductKey -ActivationStateBefore $script:Report.WindowsActivationBefore
     }
 
-    Write-Step -Number 5 -Name 'Clear Office licensing configuration'
+    Write-Step -Number 5 -Name (Get-UiText -Key 'StepClearOffice')
     if ($SkipOffice) {
         Write-Log -Message 'Office licensing cleanup skipped because -SkipOffice was specified.' -Level 'INFO'
     } else {
         Clear-OfficeKMSConfiguration
     }
 
-    Write-Step -Number 6 -Name 'Remove Office product keys'
+    Write-Step -Number 6 -Name (Get-UiText -Key 'StepRemoveOfficeKeys')
     if ($SkipOffice) {
         Write-Log -Message 'Office product key cleanup skipped because -SkipOffice was specified.' -Level 'INFO'
     } else {
         Clear-OfficeProductKeys
     }
 
-    Write-Step -Number 7 -Name 'Remove Ohook artifacts'
+    Write-Step -Number 7 -Name (Get-UiText -Key 'StepRemoveOhook')
     if ($SkipOffice -or $SkipOhookCleanup) {
         Write-Log -Message 'Ohook cleanup skipped because -SkipOffice or -SkipOhookCleanup was specified.' -Level 'INFO'
     } else {
         Remove-OhookArtifacts
     }
 
-    Write-Step -Number 8 -Name 'Remove Office license caches'
+    Write-Step -Number 8 -Name (Get-UiText -Key 'StepRemoveOfficeCaches')
     if ($SkipOffice) {
         Write-Log -Message 'Office license cache cleanup skipped because -SkipOffice was specified.' -Level 'INFO'
     } else {
         Remove-OfficeLicenseCaches
     }
 
-    Write-Step -Number 9 -Name 'Restart licensing services'
+    Write-Step -Number 9 -Name (Get-UiText -Key 'StepRestartServices')
     Restart-LicensingServices
 
     if ($InstallPostRebootSweep -and -not $PostRebootSweep) {
@@ -3029,13 +3537,13 @@ function Invoke-Main {
 
     $script:Report.WindowsActivationAfter = @(Get-WindowsActivationState)
 
-    Write-Step -Number 10 -Name 'Generate report'
+    Write-Step -Number 10 -Name (Get-UiText -Key 'StepGenerateReport')
     Generate-ActivationReport
 
-    Write-Step -Number 11 -Name 'Show next steps'
+    Write-Step -Number 11 -Name (Get-UiText -Key 'StepShowNextSteps')
     Show-NextSteps
 
-    Write-Log -Message "Completed $script:ToolName run." -Level 'SUCCESS'
+    Write-Log -Message (Get-UiText -Key 'CompletedRun') -Level 'SUCCESS'
 }
 
 try {
