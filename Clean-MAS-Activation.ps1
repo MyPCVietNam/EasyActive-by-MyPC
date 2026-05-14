@@ -31,7 +31,10 @@ param(
     [switch]$NoRestartServices,
     [switch]$ForceWindowsProductKeyRemoval,
     [switch]$InstallPostRebootSweep,
-    [switch]$PostRebootSweep
+    [switch]$PostRebootSweep,
+    [switch]$ReadOEMKeyOnly,
+    [switch]$ShowFullKeys,
+    [switch]$ExportSensitiveKeys
 )
 
 Set-StrictMode -Version 2.0
@@ -77,6 +80,18 @@ $script:Report = [ordered]@{
         ForceWindowsProductKeyRemoval = [bool]$ForceWindowsProductKeyRemoval
         InstallPostRebootSweep = [bool]$InstallPostRebootSweep
         PostRebootSweep = [bool]$PostRebootSweep
+        ReadOEMKeyOnly = [bool]$ReadOEMKeyOnly
+        ShowFullKeys = [bool]$ShowFullKeys
+        ExportSensitiveKeys = [bool]$ExportSensitiveKeys
+    }
+    OEMEmbeddedKeyInfo = [ordered]@{
+        KeyFound = $false
+        MaskedKey = $null
+        KeyDescription = $null
+        DetectedKeyEdition = 'Unknown'
+        CurrentWindowsEdition = $null
+        Compatibility = 'Unknown'
+        Notes = New-Object System.Collections.ArrayList
     }
     OS = [ordered]@{}
     WindowsActivationBefore = @()
@@ -653,6 +668,335 @@ function Get-WindowsActivationState {
     }
 
     return @($items)
+}
+
+function Mask-ProductKey {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [string]$ProductKey
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ProductKey)) {
+        return $null
+    }
+
+    $clean = (($ProductKey.Trim()) -replace '[^A-Za-z0-9]', '').ToUpperInvariant()
+    if ($clean.Length -lt 5) {
+        return 'XXXXX-XXXXX-XXXXX-XXXXX-XXXXX'
+    }
+
+    $lastFive = $clean.Substring($clean.Length - 5, 5)
+    return ('XXXXX-XXXXX-XXXXX-XXXXX-{0}' -f $lastFive)
+}
+
+function Convert-KeyDescriptionToEdition {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [string]$KeyDescription
+    )
+
+    if ([string]::IsNullOrWhiteSpace($KeyDescription)) {
+        return 'Unknown'
+    }
+
+    $text = $KeyDescription.Trim()
+
+    if ($text -match '(?i)\bServer\b') {
+        return 'Windows Server'
+    }
+    if ($text -match '(?i)CoreSingleLanguage') {
+        return 'Windows Home Single Language'
+    }
+    if ($text -match '(?i)CoreCountrySpecific') {
+        return 'Windows Home China'
+    }
+    if ($text -match '(?i)\bEducation\b') {
+        return 'Windows Education'
+    }
+    if ($text -match '(?i)\bEnterprise\b|EnterpriseS') {
+        return 'Windows Enterprise'
+    }
+    if ($text -match '(?i)\bProfessional(?:N)?\b') {
+        return 'Windows Pro'
+    }
+    if ($text -match '(?i)\bCore(?:N)?\b') {
+        return 'Windows Home'
+    }
+
+    return 'Unknown'
+}
+
+function Get-CurrentWindowsEdition {
+    [CmdletBinding()]
+    param()
+
+    $result = [ordered]@{
+        FriendlyName = 'Unknown'
+        DismEditionID = $null
+        ProductName = $null
+        EditionID = $null
+        DisplayVersion = $null
+        CurrentBuild = $null
+        Source = $null
+        Notes = New-Object System.Collections.ArrayList
+    }
+
+    $dism = Join-Path $env:SystemRoot 'System32\dism.exe'
+    if (Test-Path -LiteralPath $dism) {
+        $dismResult = Invoke-ExternalCommandSafe -FilePath $dism -Arguments @('/Online', '/Get-CurrentEdition', '/English') -Description 'Read current Windows edition with DISM' -Category 'WindowsEdition' -Target 'DISM /Online /Get-CurrentEdition' -ReadOnly -AllowFailure
+        if ($dismResult.ExitCode -eq 0) {
+            foreach ($line in @($dismResult.Output)) {
+                if ($line -match '^\s*Current Edition\s*:\s*(.+?)\s*$') {
+                    $result.DismEditionID = $Matches[1].Trim()
+                    $result.Source = 'DISM'
+                    break
+                }
+            }
+        } else {
+            $null = $result.Notes.Add('DISM current edition query failed; registry fallback used if available.')
+        }
+    } else {
+        $null = $result.Notes.Add('DISM was not found; registry fallback used if available.')
+    }
+
+    try {
+        $cv = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction Stop
+        if ($cv.PSObject.Properties.Name -contains 'ProductName') {
+            $result.ProductName = $cv.ProductName
+        }
+        if ($cv.PSObject.Properties.Name -contains 'EditionID') {
+            $result.EditionID = $cv.EditionID
+        }
+        if ($cv.PSObject.Properties.Name -contains 'DisplayVersion') {
+            $result.DisplayVersion = $cv.DisplayVersion
+        } elseif ($cv.PSObject.Properties.Name -contains 'ReleaseId') {
+            $result.DisplayVersion = $cv.ReleaseId
+        }
+        if ($cv.PSObject.Properties.Name -contains 'CurrentBuild') {
+            $result.CurrentBuild = $cv.CurrentBuild
+        }
+        if (-not $result.Source) {
+            $result.Source = 'Registry'
+        }
+    } catch {
+        $null = $result.Notes.Add("Unable to read Windows CurrentVersion registry: $($_.Exception.Message)")
+        Write-Log -Message "Unable to read current Windows edition from registry: $($_.Exception.Message)" -Level 'WARN'
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($result.ProductName)) {
+        $result.FriendlyName = $result.ProductName
+    } elseif (-not [string]::IsNullOrWhiteSpace($result.DismEditionID)) {
+        $result.FriendlyName = $result.DismEditionID
+    } elseif (-not [string]::IsNullOrWhiteSpace($result.EditionID)) {
+        $result.FriendlyName = $result.EditionID
+    }
+
+    $details = New-Object System.Collections.ArrayList
+    if (-not [string]::IsNullOrWhiteSpace($result.EditionID)) {
+        $null = $details.Add("EditionID: $($result.EditionID)")
+    }
+    if (-not [string]::IsNullOrWhiteSpace($result.DismEditionID)) {
+        $null = $details.Add("DISM: $($result.DismEditionID)")
+    }
+    if (-not [string]::IsNullOrWhiteSpace($result.DisplayVersion)) {
+        $null = $details.Add("Version: $($result.DisplayVersion)")
+    }
+    if (-not [string]::IsNullOrWhiteSpace($result.CurrentBuild)) {
+        $null = $details.Add("Build: $($result.CurrentBuild)")
+    }
+    if ($details.Count -gt 0) {
+        $result.FriendlyName = ('{0} ({1})' -f $result.FriendlyName, ($details -join ', '))
+    }
+
+    return [pscustomobject]$result
+}
+
+function Convert-EditionTextToCompatibilityGroup {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [string]$EditionText
+    )
+
+    if ([string]::IsNullOrWhiteSpace($EditionText)) {
+        return 'Unknown'
+    }
+
+    $text = $EditionText.Trim()
+
+    if ($text -match '(?i)\bServer\b') { return 'Server' }
+    if ($text -match '(?i)Single\s*Language|CoreSingleLanguage') { return 'HomeSingleLanguage' }
+    if ($text -match '(?i)CoreCountrySpecific|China') { return 'HomeChina' }
+    if ($text -match '(?i)\bEducation\b') { return 'Education' }
+    if ($text -match '(?i)\bEnterprise\b|EnterpriseS') { return 'Enterprise' }
+    if ($text -match '(?i)Workstation') { return 'ProWorkstation' }
+    if ($text -match '(?i)\bProfessional(?:N)?\b|\bPro(?:N)?\b') { return 'Pro' }
+    if ($text -match '(?i)\bCore(?:N)?\b|\bHome(?:N)?\b') { return 'Home' }
+
+    return 'Unknown'
+}
+
+function Test-OEMKeyEditionCompatibility {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [string]$DetectedKeyEdition,
+
+        [AllowNull()]
+        [object]$CurrentWindowsEdition
+    )
+
+    $currentText = $null
+    if ($CurrentWindowsEdition -is [string]) {
+        $currentText = $CurrentWindowsEdition
+    } elseif ($null -ne $CurrentWindowsEdition) {
+        $parts = New-Object System.Collections.ArrayList
+        foreach ($name in @('FriendlyName', 'ProductName', 'EditionID', 'DismEditionID')) {
+            if ($CurrentWindowsEdition.PSObject.Properties.Name -contains $name) {
+                $value = $CurrentWindowsEdition.$name
+                if (-not [string]::IsNullOrWhiteSpace([string]$value)) {
+                    $null = $parts.Add([string]$value)
+                }
+            }
+        }
+        $currentText = ($parts -join ' ')
+    }
+
+    $keyGroup = Convert-EditionTextToCompatibilityGroup -EditionText $DetectedKeyEdition
+    $currentGroup = Convert-EditionTextToCompatibilityGroup -EditionText $currentText
+
+    if ($keyGroup -eq 'Unknown' -or $currentGroup -eq 'Unknown') {
+        return 'Unknown'
+    }
+
+    if ($keyGroup -eq $currentGroup) {
+        return 'Compatible'
+    }
+
+    return 'Not compatible'
+}
+
+function Get-OEMEmbeddedProductKey {
+    [CmdletBinding()]
+    param()
+
+    $service = $null
+    $source = $null
+    $notes = New-Object System.Collections.ArrayList
+
+    try {
+        $service = Get-CimInstance -ClassName SoftwareLicensingService -ErrorAction Stop
+        $source = 'CIM'
+    } catch {
+        $message = "Get-CimInstance SoftwareLicensingService failed; trying WMI fallback. $($_.Exception.Message)"
+        Write-Log -Message $message -Level 'VERBOSE'
+        $null = $notes.Add('CIM query failed; WMI fallback was attempted.')
+    }
+
+    if (-not $service) {
+        try {
+            $service = Get-WmiObject -Class SoftwareLicensingService -ErrorAction Stop
+            $source = 'WMI'
+        } catch {
+            $message = "Unable to read SoftwareLicensingService through CIM or WMI: $($_.Exception.Message)"
+            Write-Log -Message $message -Level 'WARN'
+            $null = $notes.Add($message)
+        }
+    }
+
+    $key = $null
+    $description = $null
+    if ($service) {
+        if ($service.PSObject.Properties.Name -contains 'OA3xOriginalProductKey') {
+            $key = [string]$service.OA3xOriginalProductKey
+        }
+        if ($service.PSObject.Properties.Name -contains 'OA3xOriginalProductKeyDescription') {
+            $description = [string]$service.OA3xOriginalProductKeyDescription
+        }
+    }
+
+    $currentEdition = Get-CurrentWindowsEdition
+    $detectedEdition = Convert-KeyDescriptionToEdition -KeyDescription $description
+    $compatibility = Test-OEMKeyEditionCompatibility -DetectedKeyEdition $detectedEdition -CurrentWindowsEdition $currentEdition
+    $keyFound = -not [string]::IsNullOrWhiteSpace($key)
+    $maskedKey = Mask-ProductKey -ProductKey $key
+
+    if (-not $keyFound) {
+        $maskedKey = $null
+        $detectedEdition = 'Unknown'
+        $compatibility = 'Unknown'
+        $null = $notes.Add('No OEM embedded product key found in BIOS/UEFI.')
+    }
+
+    if ([string]::IsNullOrWhiteSpace($description)) {
+        $null = $notes.Add('OA3xOriginalProductKeyDescription was empty or unavailable.')
+    }
+    if ($compatibility -eq 'Unknown') {
+        $null = $notes.Add('Edition compatibility could not be determined confidently.')
+    } elseif ($compatibility -eq 'Not compatible') {
+        $null = $notes.Add('The embedded OEM key appears to target a different Windows edition. Automatic edition switching was not attempted.')
+    }
+    if ($source) {
+        $null = $notes.Add("SoftwareLicensingService source: $source.")
+    }
+
+    $info = [ordered]@{
+        KeyFound = [bool]$keyFound
+        MaskedKey = $maskedKey
+        KeyDescription = $description
+        DetectedKeyEdition = $detectedEdition
+        CurrentWindowsEdition = $currentEdition.FriendlyName
+        Compatibility = $compatibility
+        Notes = $notes
+    }
+
+    if ($ExportSensitiveKeys -and $keyFound) {
+        $info['FullKey'] = $key
+    }
+
+    $script:Report.OEMEmbeddedKeyInfo = $info
+
+    Write-Host ''
+    Write-Host 'OEM embedded Windows product key' -ForegroundColor Cyan
+    if (-not $keyFound) {
+        Write-Host 'No OEM embedded product key found in BIOS/UEFI.' -ForegroundColor Yellow
+        Write-Log -Message 'No OEM embedded product key found in BIOS/UEFI.' -Level 'INFO'
+    } else {
+        if ($ExportSensitiveKeys) {
+            Write-Host 'WARNING: Sensitive key export is enabled. Keep the report private.' -ForegroundColor Yellow
+            Write-Log -Message 'WARNING: Sensitive key export is enabled. Keep the report private.' -Level 'INFO'
+        }
+
+        if ($ShowFullKeys) {
+            Write-Host ("Product key: {0}" -f $key) -ForegroundColor Yellow
+            Write-Log -Message ("OEM embedded product key found: {0}. Full key was shown on console only." -f $maskedKey) -Level 'INFO'
+        } else {
+            Write-Host ("Product key: {0}" -f $maskedKey) -ForegroundColor Gray
+            Write-Log -Message ("OEM embedded product key found: {0}" -f $maskedKey) -Level 'INFO'
+        }
+    }
+
+    Write-Host ("Key description: {0}" -f $(if ([string]::IsNullOrWhiteSpace($description)) { 'Unknown' } else { $description })) -ForegroundColor Gray
+    Write-Host ("Detected key edition: {0}" -f $detectedEdition) -ForegroundColor Gray
+    Write-Host ("Current Windows edition: {0}" -f $currentEdition.FriendlyName) -ForegroundColor Gray
+    Write-Host ("Compatibility: {0}" -f $compatibility) -ForegroundColor Gray
+
+    foreach ($note in @($notes)) {
+        Write-Log -Message ("OEM key note: {0}" -f $note) -Level 'INFO'
+    }
+
+    Add-ReportAction -Category 'OEMEmbeddedKey' -Action 'Read OEM embedded Windows product key' -Target 'SoftwareLicensingService.OA3xOriginalProductKey' -Status 'Done' -Detail ('KeyFound={0}; Compatibility={1}' -f $keyFound, $compatibility) -Data ([pscustomobject]@{
+        KeyFound = $keyFound
+        MaskedKey = $maskedKey
+        KeyDescription = $description
+        DetectedKeyEdition = $detectedEdition
+        CurrentWindowsEdition = $currentEdition.FriendlyName
+        Compatibility = $compatibility
+    })
+
+    return [pscustomobject]$info
 }
 
 function Test-WindowsActivationLooksKms {
@@ -2450,6 +2794,15 @@ function New-PlainTextReport {
         $null = $lines.Add(('  {0}: {1}' -f $key, $script:Report.OS[$key]))
     }
     $null = $lines.Add('')
+    $null = $lines.Add('OEM embedded key info:')
+    foreach ($key in $script:Report.OEMEmbeddedKeyInfo.Keys) {
+        $value = $script:Report.OEMEmbeddedKeyInfo[$key]
+        if ($value -is [System.Collections.IEnumerable] -and -not ($value -is [string])) {
+            $value = @($value) -join '; '
+        }
+        $null = $lines.Add(('  {0}: {1}' -f $key, $value))
+    }
+    $null = $lines.Add('')
     $null = $lines.Add(('Actions: {0}' -f $script:Report.Actions.Count))
     $null = $lines.Add(('Warnings: {0}' -f $script:Report.Warnings.Count))
     $null = $lines.Add(('Errors: {0}' -f $script:Report.Errors.Count))
@@ -2576,6 +2929,36 @@ function Invoke-Main {
     Write-Log -Message "Log file: $script:LogPath" -Level 'INFO'
     if ($script:DryRunMode) {
         Write-Log -Message 'Dry-run/WhatIf mode is active. No system changes will be made.' -Level 'INFO'
+    }
+    if ($ExportSensitiveKeys) {
+        Write-Host 'WARNING: Sensitive key export is enabled. Keep the report private.' -ForegroundColor Yellow
+        Write-Log -Message 'WARNING: Sensitive key export is enabled. Keep the report private.' -Level 'INFO'
+    }
+
+    if ($ReadOEMKeyOnly) {
+        Write-Step -Number 1 -Name 'Pre-flight check'
+        $script:Report.OS = Get-WindowsOSInfo
+        Write-Log -Message 'Read-only OEM embedded key mode is active. Cleanup, restore point creation, product-key changes, activation commands, and service restarts are skipped.' -Level 'INFO'
+
+        Write-Step -Number 2 -Name 'Read OEM embedded key from BIOS/UEFI'
+        Get-OEMEmbeddedProductKey | Out-Null
+
+        $script:Report.NextSteps.Clear()
+        $null = $script:Report.NextSteps.Add('No system changes were made by this read-only OEM embedded key check.')
+        $null = $script:Report.NextSteps.Add('If compatibility is Not compatible, use a valid key for the current Windows edition or install the edition that matches the OEM key.')
+        $null = $script:Report.NextSteps.Add('This tool does not remove Microsoft server-side Digital License/HWID entitlement and does not activate Windows.')
+        if ($ExportSensitiveKeys) {
+            $null = $script:Report.NextSteps.Add('Sensitive key export was enabled; keep generated reports private.')
+        }
+
+        Write-Step -Number 3 -Name 'Generate report'
+        Generate-ActivationReport
+
+        Write-Step -Number 4 -Name 'Show next steps'
+        Show-NextSteps
+
+        Write-Log -Message "Completed $script:ToolName read-only OEM embedded key run." -Level 'SUCCESS'
+        return
     }
 
     Write-Step -Number 1 -Name 'Pre-flight check'

@@ -19,9 +19,26 @@ Run `DeActive-by-MyPC.bat` as Administrator, then choose:
 2. Clean Office and Windows activation keys/configuration
 3. Clean Office activation keys/configuration only
 4. Clean Windows activation keys/configuration only
+5. Read OEM embedded key from motherboard / BIOS / UEFI
 ```
 
 Real cleanup menu options use `-CreateRestorePoint` by default. If System Restore is disabled, the tool logs a warning and continues.
+
+Menu option 5 is read-only. It does not create a restore point, remove keys, install keys, activate Windows, restart licensing services, or call `slmgr /ipk` / `slmgr /ato`.
+
+## Read OEM Embedded Key
+
+The tool can read the Windows product key embedded in motherboard BIOS/UEFI firmware by querying `SoftwareLicensingService.OA3xOriginalProductKey`.
+
+Notes:
+
+- Not all machines have an embedded OEM key.
+- The OEM key is usually tied to the original Windows edition shipped with the device.
+- If the current installed Windows edition does not match the OEM key edition, activation may fail.
+- With MAS HWID/Digital License activation, this tool cannot remove Microsoft server-side digital entitlement for the device hardware.
+- This function is read-only and does not activate Windows.
+- Product keys are sensitive. By default, the console and reports show a masked key like `XXXXX-XXXXX-XXXXX-XXXXX-ABCDE`.
+- Advanced PowerShell parameters are available: `-ReadOEMKeyOnly`, `-ShowFullKeys`, and `-ExportSensitiveKeys`. Use `-ExportSensitiveKeys` only when the generated report will be kept private.
 
 ## Safety Notes
 
@@ -57,9 +74,9 @@ Unsupported or missing components are skipped with log entries instead of crashi
 ## SHA256
 
 ```text
-Clean-MAS-Activation.ps1  353A26122FFA38EEF240DF51FC8C256BC3410BBA3280214CA393AC1FBCBD1A0A
-Clean-MAS-Activation.cmd  C3981DAD828B833611C7112928B87721026AE3E810AFB177F7EEFF3F7743920C
-DeActive-by-MyPC.bat     0693164C6DD3F19460DA8A273CDCFCF4B1216987F18894FED9DD40277974D6CD
+Clean-MAS-Activation.ps1  B4567ECC3FBF5655B999D464B700BA5F2032154E65FD5CBF17DCB8DCA468EFEF
+Clean-MAS-Activation.cmd  8FFD65C68ACFA71470C3CFD00B8A7D0C66A8B495D36CD9D56662E9185F8DBDD2
+DeActive-by-MyPC.bat     6FD540C65395B12D3469427C7C33626EEF837DE93810C49A0359D36B84E61713
 README.md                See CHECKSUMS.sha256
 ```
 

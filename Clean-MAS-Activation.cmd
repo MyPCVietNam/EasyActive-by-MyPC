@@ -67,10 +67,11 @@ echo   1. Dry-run only ^(simulate cleanup, no changes^)
 echo   2. Clean Office and Windows activation keys/configuration
 echo   3. Clean Office activation keys/configuration only
 echo   4. Clean Windows activation keys/configuration only
+echo   5. Read OEM embedded key from motherboard / BIOS / UEFI
 echo.
 echo Close this window to exit.
 echo.
-set /p "CHOICE=Enter choice [1-4]: "
+set /p "CHOICE=Enter choice [1-5]: "
 
 if "%CHOICE%"=="1" (
     call :RunPowerShell -DryRun -CreateRestorePoint -VerboseLog -ExportReport
@@ -94,6 +95,10 @@ if "%CHOICE%"=="4" (
     call :ConfirmWindowsKeyRemoval
     if errorlevel 1 goto :Menu
     call :RunPowerShell -CreateRestorePoint -SkipOffice -ForceWindowsProductKeyRemoval -VerboseLog -ExportReport
+    goto :Done
+)
+if "%CHOICE%"=="5" (
+    call :RunPowerShell -ReadOEMKeyOnly -VerboseLog -ExportReport
     goto :Done
 )
 
