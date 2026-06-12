@@ -1,6 +1,15 @@
 # DeActive by MyPC
 
-Phiên bản: `1.3.0`
+Phiên bản: `1.4.0`
+
+## Thay đổi trong v1.4.0
+
+- **Fix N.N 1:** Registry backup thất bại không còn chặn quá trình dọn dẹp khi chạy với tùy chọn đầy đủ (option 2/3/4). Trước đây nếu ổ C gần đầy hoặc không ghi được backup, registry KMS bị bỏ qua im lặng.
+- **Fix N.N 2:** Bổ sung đầy đủ các đường dẫn registry Click-to-Run (`ClickToRun\Configuration`, `Policies\...\OfficePolicies`) vào `Clear-OfficeKMSConfiguration`. Đây là nguyên nhân chính khiến Office tự kích hoạt lại KMS sau khi dọn, vì C2R lưu cấu hình KMS riêng.
+- **Fix N.N 2:** `Restart-LicensingServices` nay bao gồm `ClickToRunSvc` và `OfficeSvcMgr` để C2R renewal service được reset đúng.
+- **Fix N.N 3:** `Stop-OfficeProcessesSafe` được thêm mới và tự động chạy trước bước dọn Ohook. Force-kill toàn bộ tiến trình Office và dừng service ClickToRunSvc để giải phóng file lock trên `sppc.dll` / `OSPPC.DLL`.
+- **Fix N.N 3:** `Get-OhookDirectories` bổ sung thêm đường dẫn MSI (`Office16`, `Office15`, `Office14`, `Office19`) để phát hiện Ohook trong cả bản MSI lẫn C2R.
+- **Fix N.N 3:** Launcher tự phát hiện tiến trình Office đang chạy và đề nghị force-close thay vì chỉ hỏi người dùng.
 
 ## Công cụ này dùng để làm gì?
 

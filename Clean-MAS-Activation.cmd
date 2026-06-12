@@ -2,7 +2,7 @@
 setlocal EnableExtensions
 
 set "TOOL_NAME=DeActive by MyPC"
-set "TOOL_VERSION=1.3.0"
+set "TOOL_VERSION=1.4.0"
 set "LAC_ROOT=%ProgramData%\LegitActivationCleaner"
 
 title %TOOL_NAME%

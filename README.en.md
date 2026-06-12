@@ -1,6 +1,15 @@
 # DeActive by MyPC
 
-Version: `1.3.0`
+Version: `1.4.0`
+
+## Changes in v1.4.0
+
+- **Fix root cause 1:** Registry backup failure no longer silently blocks cleanup when running with full options (2/3/4). Previously, a full or unwritable disk could cause all KMS registry values to be skipped without any visible error.
+- **Fix root cause 2:** Added missing Click-to-Run registry paths (`ClickToRun\Configuration`, `Policies\...\OfficePolicies`) to `Clear-OfficeKMSConfiguration`. This was the primary cause of Office re-activating via KMS after cleanup, because C2R stores its own KMS host separately.
+- **Fix root cause 2:** `Restart-LicensingServices` now includes `ClickToRunSvc` and `OfficeSvcMgr` so the C2R renewal service is properly reset.
+- **Fix root cause 3:** New `Stop-OfficeProcessesSafe` function runs automatically before Ohook cleanup. It force-kills all Office processes and stops `ClickToRunSvc` to release file locks on `sppc.dll` / `OSPPC.DLL`.
+- **Fix root cause 3:** `Get-OhookDirectories` now includes MSI Office paths (`Office16`, `Office15`, `Office14`, `Office19`) to detect Ohook in MSI installations as well as C2R.
+- **Fix root cause 3:** Launcher now auto-detects running Office processes and offers to force-close them instead of only asking the user.
 
 `DeActive by MyPC` is a conservative Windows/Office activation cleanup tool for IT technicians who need to remove old non-standard MAS/KMS-style activation configuration so a machine can be activated again with a legitimate Windows digital license, product key, Microsoft account, or Microsoft 365 account.
 

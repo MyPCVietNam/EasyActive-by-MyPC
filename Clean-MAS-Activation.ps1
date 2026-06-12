@@ -45,7 +45,7 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
 $script:ToolName = 'DeActive by MyPC'
-$script:Version = '1.3.0'
+$script:Version = '1.4.0'
 $script:Language = $Language.ToLowerInvariant()
 $script:RunId = Get-Date -Format 'yyyyMMdd-HHmmss'
 $script:ProgramDataRoot = Join-Path $env:ProgramData 'LegitActivationCleaner'
@@ -273,6 +273,7 @@ function Get-UiText {
             'StepClearOffice' { return 'Clear Office licensing configuration' }
             'StepRemoveOfficeKeys' { return 'Remove Office product keys' }
             'StepRemoveOhook' { return 'Remove Ohook artifacts' }
+            'StepKillOfficeProcesses' { return 'Stop Office processes to release DLL file locks' }
             'StepRemoveOfficeCaches' { return 'Remove Office license caches' }
             'StepRestartServices' { return 'Restart licensing services' }
             'NoChangeOEMNextStep' { return 'No system changes were made by this read-only OEM embedded key check.' }
@@ -323,6 +324,7 @@ function Get-UiText {
         'StepClearOffice' { return 'Dọn cấu hình kích hoạt Office' }
         'StepRemoveOfficeKeys' { return 'Gỡ product key Office' }
         'StepRemoveOhook' { return 'Gỡ dấu vết Ohook' }
+        'StepKillOfficeProcesses' { return 'Dừng tiến trình Office để giải phóng file lock DLL' }
         'StepRemoveOfficeCaches' { return 'Dọn cache license Office' }
         'StepRestartServices' { return 'Restart dịch vụ licensing' }
         'NoChangeOEMNextStep' { return 'Tính năng đọc key OEM chỉ đọc thông tin, không kích hoạt Windows và không thay đổi hệ thống.' }
@@ -586,22 +588,47 @@ function Confirm-OfficeAppsClosedFromLauncher {
     [CmdletBinding()]
     param()
 
+    $officeProcessNames = @('WINWORD','EXCEL','POWERPNT','OUTLOOK','ONENOTE','MSACCESS','MSPUB','MSPROJECT','VISIO','GROOVE','LYNC','INFOPATH','OfficeClickToRun','c2rlicensing')
+    $running = @($officeProcessNames | ForEach-Object { Get-Process -Name $_ -ErrorAction SilentlyContinue } | Where-Object { $_ })
+
     Write-Host ''
-    if ($script:Language -eq 'en') {
-        Write-Host 'NOTE:' -ForegroundColor Yellow
-        Write-Host 'Close all Word, Excel, PowerPoint, Outlook, and other Office apps before continuing.' -ForegroundColor Yellow
-        Write-Host 'If Office is open, some license/cache files may not be processed.' -ForegroundColor Yellow
-        Write-Host ''
-        $answer = Read-Host 'Have you closed all Office apps? (Y/N)'
-    } else {
-        Write-Host 'LƯU Ý:' -ForegroundColor Yellow
-        Write-Host 'Hãy đóng toàn bộ Word, Excel, PowerPoint, Outlook và các ứng dụng Office trước khi tiếp tục.' -ForegroundColor Yellow
-        Write-Host 'Nếu Office đang mở, một số file license/cache có thể không xử lý được.' -ForegroundColor Yellow
-        Write-Host ''
-        $answer = Read-Host 'Bạn đã đóng toàn bộ ứng dụng Office chưa? (Y/N)'
+    if ($running.Count -eq 0) {
+        if ($script:Language -eq 'en') {
+            Write-Host 'No Office processes detected. Continuing.' -ForegroundColor Green
+        } else {
+            Write-Host 'Không phát hiện tiến trình Office đang chạy. Tiếp tục.' -ForegroundColor Green
+        }
+        return $true
     }
 
-    return ($answer -match '^(?i)y$')
+    $runningNames = ($running | Select-Object -ExpandProperty Name -Unique) -join ', '
+    if ($script:Language -eq 'en') {
+        Write-Host 'NOTE:' -ForegroundColor Yellow
+        Write-Host "The following Office processes are still running: $runningNames" -ForegroundColor Yellow
+        Write-Host 'They must be closed before Ohook DLL cleanup can work.' -ForegroundColor Yellow
+        Write-Host ''
+        $answer = Read-Host 'Force-close all Office apps now? (Y=Yes / N=Cancel)'
+    } else {
+        Write-Host 'LƯU Ý:' -ForegroundColor Yellow
+        Write-Host "Các tiến trình Office đang chạy: $runningNames" -ForegroundColor Yellow
+        Write-Host 'Cần đóng trước khi dọn DLL Ohook có thể hoạt động đúng.' -ForegroundColor Yellow
+        Write-Host ''
+        $answer = Read-Host 'Buộc đóng tất cả ứng dụng Office ngay? (Y=Có / N=Hủy)'
+    }
+
+    if ($answer -notmatch '^(?i)y$') {
+        return $false
+    }
+
+    foreach ($proc in $running) {
+        try {
+            Stop-Process -Id $proc.Id -Force -ErrorAction Stop
+        } catch {
+            Write-Host "  Could not stop $($proc.Name): $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+    Start-Sleep -Milliseconds 800
+    return $true
 }
 
 function Confirm-WindowsKeyRemovalFromLauncher {
@@ -996,8 +1023,12 @@ function Remove-RegistryValuesSafe {
 
     $backup = Export-RegistryKeySafe -RegistryPath $KeyPath -Reason 'Backup before removing KMS-related values'
     if (-not $script:DryRunMode -and -not $backup) {
-        Write-Log -Message "Skipping registry value cleanup because backup failed: $KeyPath" -Level 'WARN'
-        return
+        if ($Force) {
+            Write-Log -Message "Registry backup failed but -Force specified; continuing without backup: $KeyPath" -Level 'WARN'
+        } else {
+            Write-Log -Message "Skipping registry value cleanup because backup failed: $KeyPath" -Level 'WARN'
+            return
+        }
     }
 
     foreach ($name in $existing) {
@@ -1036,8 +1067,12 @@ function Remove-RegistryKeySafe {
 
     $backup = Export-RegistryKeySafe -RegistryPath $KeyPath -Reason "Backup before: $Reason"
     if (-not $script:DryRunMode -and -not $backup) {
-        Write-Log -Message "Skipping registry key removal because backup failed: $KeyPath" -Level 'WARN'
-        return
+        if ($Force) {
+            Write-Log -Message "Registry backup failed but -Force specified; continuing without backup: $KeyPath" -Level 'WARN'
+        } else {
+            Write-Log -Message "Skipping registry key removal because backup failed: $KeyPath" -Level 'WARN'
+            return
+        }
     }
 
     Invoke-SafeAction -Description ('{0}: {1}' -f $Reason, $KeyPath) -Category 'Registry' -Target $KeyPath -Data ([pscustomobject]@{
@@ -2362,13 +2397,33 @@ function Clear-OfficeKMSConfiguration {
         'DisableKeyManagementServiceHostCaching'
     )
 
+    # Standard MSI / SPP platform paths
     $keyPaths = @(
         'HKLM:\SOFTWARE\Microsoft\OfficeSoftwareProtectionPlatform',
         'HKLM:\SOFTWARE\WOW6432Node\Microsoft\OfficeSoftwareProtectionPlatform'
     )
 
-    foreach ($keyPath in $keyPaths) {
+    # C2R ClickToRun Configuration paths (Fix N.N 2: these were missing)
+    $c2rPaths = @(
+        'HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration',
+        'HKLM:\SOFTWARE\Microsoft\Office\15.0\ClickToRun\Configuration'
+    )
+
+    # Group Policy / Policies paths that can override Office KMS settings
+    $programFilesX86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+    foreach ($ver in @('16.0', '15.0', '14.0')) {
+        $keyPaths += "HKLM:\SOFTWARE\Policies\Microsoft\Office\$ver\Common\OfficePolicies"
+        $keyPaths += "HKLM:\SOFTWARE\Policies\Microsoft\Office\$ver\Common\Licensing"
+    }
+
+    foreach ($keyPath in ($keyPaths | Select-Object -Unique)) {
         Remove-RegistryValuesSafe -KeyPath $keyPath -ValueNames $valueNames -Category 'OfficeKMSRegistry'
+    }
+
+    # C2R paths: same value names plus SharedComputerLicensing
+    $c2rValueNames = $valueNames + @('OSPPREARM', 'SharedComputerLicensing')
+    foreach ($keyPath in ($c2rPaths | Select-Object -Unique)) {
+        Remove-RegistryValuesSafe -KeyPath $keyPath -ValueNames $c2rValueNames -Category 'OfficeKMSRegistry'
     }
 }
 
@@ -2905,15 +2960,27 @@ function Get-OhookDirectories {
 
     $programFilesX86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
     $dirs = @(
+        # C2R VFS paths (x64)
         (Join-Path $env:ProgramFiles 'Microsoft Office\root\vfs\System'),
         (Join-Path $env:ProgramFiles 'Microsoft Office\root\vfs\SystemX86'),
-        (Join-Path $env:ProgramFiles 'Common Files\Microsoft Shared\OfficeSoftwareProtectionPlatform')
+        (Join-Path $env:ProgramFiles 'Common Files\Microsoft Shared\OfficeSoftwareProtectionPlatform'),
+        # MSI paths Office 14/15/16/19 (x64) - Fix N.N 3: were missing
+        (Join-Path $env:ProgramFiles 'Microsoft Office\Office16'),
+        (Join-Path $env:ProgramFiles 'Microsoft Office\Office15'),
+        (Join-Path $env:ProgramFiles 'Microsoft Office\Office14'),
+        (Join-Path $env:ProgramFiles 'Microsoft Office\Office19')
     )
     if (-not [string]::IsNullOrWhiteSpace($programFilesX86)) {
         $dirs += @(
+            # C2R VFS paths (x86)
             (Join-Path $programFilesX86 'Microsoft Office\root\vfs\System'),
             (Join-Path $programFilesX86 'Microsoft Office\root\vfs\SystemX86'),
-            (Join-Path $programFilesX86 'Common Files\Microsoft Shared\OfficeSoftwareProtectionPlatform')
+            (Join-Path $programFilesX86 'Common Files\Microsoft Shared\OfficeSoftwareProtectionPlatform'),
+            # MSI paths Office 14/15/16/19 (x86) - Fix N.N 3: were missing
+            (Join-Path $programFilesX86 'Microsoft Office\Office16'),
+            (Join-Path $programFilesX86 'Microsoft Office\Office15'),
+            (Join-Path $programFilesX86 'Microsoft Office\Office14'),
+            (Join-Path $programFilesX86 'Microsoft Office\Office19')
         )
     }
     return @($dirs | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
@@ -3043,6 +3110,50 @@ function Rename-PathToBackupSafe {
     return $destination
 }
 
+function Stop-OfficeProcessesSafe {
+    [CmdletBinding()]
+    param()
+
+    # Fix N.N 3: Force-kill all Office processes so DLL files are not locked
+    # when Ohook removal runs. Without this, Rename-Item / Remove-Item fails
+    # silently and sppc.dll / OSPPC.DLL are never actually cleaned.
+    $officeProcessNames = @(
+        'WINWORD', 'EXCEL', 'POWERPNT', 'OUTLOOK', 'ONENOTE',
+        'MSACCESS', 'MSPUB', 'MSPROJECT', 'VISIO', 'INFOPATH',
+        'GROOVE', 'LYNC', 'MSOASB', 'MSOHTMED',
+        'OfficeClickToRun', 'c2rlicensing'
+    )
+
+    $killed = @()
+    foreach ($name in $officeProcessNames) {
+        $procs = @(Get-Process -Name $name -ErrorAction SilentlyContinue)
+        foreach ($proc in $procs) {
+            Invoke-SafeAction -Description "Stop Office process $name (PID $($proc.Id)) to release DLL file locks" -Category 'OfficeProcess' -Target $name -Action {
+                Stop-Process -Id $proc.Id -Force -ErrorAction Stop
+            } | Out-Null
+            $killed += $name
+        }
+    }
+
+    # Also stop ClickToRun service which holds file locks on C2R DLLs
+    foreach ($svcName in @('ClickToRunSvc', 'OfficeSvcMgr')) {
+        $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
+        if ($svc -and $svc.Status -eq 'Running') {
+            Invoke-SafeAction -Description "Stop service $svcName to release C2R DLL file locks" -Category 'OfficeProcess' -Target $svcName -Action {
+                Stop-Service -Name $svcName -Force -ErrorAction Stop
+            } | Out-Null
+            $killed += $svcName
+        }
+    }
+
+    if ($killed.Count -gt 0) {
+        Write-Log -Message ("Stopped $($killed.Count) Office process(es)/service(s) to release DLL locks: " + ($killed -join ', ')) -Level 'INFO'
+        Start-Sleep -Milliseconds 800
+    } else {
+        Write-Log -Message 'No Office processes or services were running; DLL file locks already clear.' -Level 'VERBOSE'
+    }
+}
+
 function Remove-OhookArtifacts {
     [CmdletBinding()]
     param(
@@ -3135,7 +3246,7 @@ function Restart-LicensingServices {
         return
     }
 
-    $services = @('sppsvc', 'ClipSVC', 'osppsvc')
+    $services = @('sppsvc', 'ClipSVC', 'osppsvc', 'ClickToRunSvc', 'OfficeSvcMgr')
     foreach ($serviceName in $services) {
         try {
             $service = Get-Service -Name $serviceName -ErrorAction Stop
@@ -3515,6 +3626,8 @@ function Invoke-Main {
     if ($SkipOffice -or $SkipOhookCleanup) {
         Write-Log -Message 'Ohook cleanup skipped because -SkipOffice or -SkipOhookCleanup was specified.' -Level 'INFO'
     } else {
+        # Fix N.N 3: kill Office processes first so sppc.dll / OSPPC.DLL are not file-locked
+        Stop-OfficeProcessesSafe
         Remove-OhookArtifacts
     }
 
