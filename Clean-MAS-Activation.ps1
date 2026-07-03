@@ -35,6 +35,9 @@ param(
     [switch]$ReadOEMKeyOnly,
     [switch]$ShowFullKeys,
     [switch]$ExportSensitiveKeys,
+    [switch]$ReinstallOEMKey,
+    [switch]$SkipOEMActivation,
+    [switch]$CheckLicenseOnly,
     [switch]$LauncherMenu,
 
     [ValidateSet('vi', 'en')]
@@ -45,7 +48,7 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
 $script:ToolName = 'DeActive by MyPC'
-$script:Version = '1.4.0'
+$script:Version = '1.6.0'
 $script:Language = $Language.ToLowerInvariant()
 $script:RunId = Get-Date -Format 'yyyyMMdd-HHmmss'
 $script:ProgramDataRoot = Join-Path $env:ProgramData 'LegitActivationCleaner'
@@ -88,8 +91,19 @@ $script:Report = [ordered]@{
         ReadOEMKeyOnly = [bool]$ReadOEMKeyOnly
         ShowFullKeys = [bool]$ShowFullKeys
         ExportSensitiveKeys = [bool]$ExportSensitiveKeys
+        ReinstallOEMKey = [bool]$ReinstallOEMKey
+        SkipOEMActivation = [bool]$SkipOEMActivation
+        CheckLicenseOnly = [bool]$CheckLicenseOnly
         LauncherMenu = [bool]$LauncherMenu
         Language = $script:Language
+    }
+    LicenseStatusCheck = [ordered]@{
+        Requested = $false
+        WindowsEdition = $null
+        WindowsExpiry = $null
+        WindowsProductCount = 0
+        OfficeProductCount = 0
+        Notes = New-Object System.Collections.ArrayList
     }
     OEMEmbeddedKeyInfo = [ordered]@{
         KeyFound = $false
@@ -98,6 +112,19 @@ $script:Report = [ordered]@{
         DetectedKeyEdition = 'Unknown'
         CurrentWindowsEdition = $null
         Compatibility = 'Unknown'
+        Notes = New-Object System.Collections.ArrayList
+    }
+    OEMKeyReinstall = [ordered]@{
+        Requested = $false
+        Attempted = $false
+        KeyFound = $false
+        Compatibility = 'Unknown'
+        MaskedKey = $null
+        InstallStatus = 'NotAttempted'
+        InstallExitCode = $null
+        ActivationRequested = $false
+        ActivationStatus = 'NotAttempted'
+        ActivationExitCode = $null
         Notes = New-Object System.Collections.ArrayList
     }
     OS = [ordered]@{}
@@ -285,6 +312,35 @@ function Get-UiText {
             'M365NextStep' { return 'For Microsoft 365 / Click-to-Run Office: open an Office app and sign in with a valid Microsoft/M365 account.' }
             'OfficeVolumeNextStep' { return 'For valid Office volume/MSI licensing: use ospp.vbs /inpkey:XXXXX-XXXXX-XXXXX-XXXXX-XXXXX, then follow your organization activation process.' }
             'OfficeRepairNextStep' { return 'If Office reports licensing errors, run Apps & Features > Microsoft 365 / Office > Modify > Quick Repair.' }
+            'StepReinstallOEMKey' { return 'Reinstall the OEM embedded key and activate' }
+            'ReinstallOEMTitle' { return 'Reinstall OEM embedded Windows product key' }
+            'ReinstallOEMNoKey' { return 'No OEM embedded key was found in BIOS/UEFI, so there is nothing to reinstall.' }
+            'ReinstallOEMNotCompatible' { return 'The embedded OEM key targets a different Windows edition than the one installed. Automatic reinstall was skipped to avoid a guaranteed failure. Use -Force to attempt it anyway, or install the matching Windows edition first.' }
+            'ReinstallOEMInstalling' { return 'Installing the OEM embedded product key with slmgr /ipk...' }
+            'ReinstallOEMInstalled' { return 'The OEM embedded product key was installed successfully.' }
+            'ReinstallOEMInstallFailed' { return 'Installing the OEM embedded product key failed. See the log and report for the exit code and details.' }
+            'ReinstallOEMActivating' { return 'Activating Windows online with slmgr /ato...' }
+            'ReinstallOEMActivated' { return 'Windows activation request completed. Verify the result with slmgr /dlv or Settings > System > Activation.' }
+            'ReinstallOEMActivateFailed' { return 'Online activation did not complete (this often means no internet connection). The key is installed; run slmgr /ato again once the machine is online.' }
+            'ReinstallOEMSkippedActivation' { return 'Activation was skipped (-SkipOEMActivation). The key is installed; run slmgr /ato to activate when ready.' }
+            'ReinstallOEMWouldRun' { return 'Dry-run: the OEM embedded key would be reinstalled and activated. No change was made.' }
+            'ReinstallOEMNextStep' { return 'The OEM embedded key was reinstalled automatically from firmware. If Windows is not yet activated, connect to the internet and run slmgr /ato, then verify with slmgr /dlv.' }
+            'StepCheckLicense' { return 'Check Windows and Office license / activation status' }
+            'LicenseCheckMode' { return 'Read-only license/activation status check is active. No cleanup, restore point, key change, or service restart is performed.' }
+            'CompletedLicenseCheck' { return "Completed $script:ToolName read-only license status check." }
+            'LicenseWindowsTitle' { return 'Windows license / activation status' }
+            'LicenseOfficeTitle' { return 'Office license / activation status' }
+            'LicenseNoWindowsProduct' { return 'No Windows license with an installed product key was found.' }
+            'LicenseNoOffice' { return 'No Office installation (ospp.vbs) was detected.' }
+            'LicenseChannelLabel' { return 'Channel' }
+            'LicenseStatusLabel' { return 'Status' }
+            'LicenseExpiryLabel' { return 'Expiry' }
+            'LicensePartialKeyLabel' { return 'Installed key (last 5)' }
+            'LicenseGraceLabel' { return 'Grace remaining (minutes)' }
+            'LicenseProductLabel' { return 'Product' }
+            'ReportWindowsActivationHeading' { return 'Windows activation status:' }
+            'ReportOfficeHeading' { return 'Office license status:' }
+            'LicenseCheckNextStep' { return 'This was a read-only status check; nothing was changed. Windows status "Licensed" and Office status "---LICENSED---" mean activated. "Notification"/"Unlicensed" or a grace state means Windows/Office is not fully activated. The channel shows how it is licensed (OEM, Retail, Volume:MAK, or Volume:GVLK for KMS clients).' }
             default { return $Key }
         }
     }
@@ -336,6 +392,35 @@ function Get-UiText {
         'M365NextStep' { return 'Với Microsoft 365 / Office Click-to-Run: mở ứng dụng Office và đăng nhập tài khoản Microsoft/Microsoft 365 hợp lệ.' }
         'OfficeVolumeNextStep' { return 'Với Office volume/MSI hợp lệ: dùng ospp.vbs /inpkey:XXXXX-XXXXX-XXXXX-XXXXX-XXXXX, sau đó kích hoạt theo quy trình của tổ chức.' }
         'OfficeRepairNextStep' { return 'Nếu Office báo lỗi license, vào Apps & Features > Microsoft 365 / Office > Modify > Quick Repair.' }
+        'StepReinstallOEMKey' { return 'Cài lại key OEM nhúng và kích hoạt' }
+        'ReinstallOEMTitle' { return 'Cài lại key Windows OEM nhúng trong BIOS/UEFI' }
+        'ReinstallOEMNoKey' { return 'Không tìm thấy key OEM trong BIOS/UEFI nên không có gì để cài lại.' }
+        'ReinstallOEMNotCompatible' { return 'Key OEM nhúng thuộc phiên bản Windows khác với phiên bản đang cài. Đã bỏ qua cài lại tự động để tránh chắc chắn thất bại. Dùng -Force để vẫn thử, hoặc cài đúng phiên bản Windows khớp với key trước.' }
+        'ReinstallOEMInstalling' { return 'Đang cài key OEM nhúng bằng slmgr /ipk...' }
+        'ReinstallOEMInstalled' { return 'Đã cài key OEM nhúng thành công.' }
+        'ReinstallOEMInstallFailed' { return 'Cài key OEM nhúng thất bại. Xem log và báo cáo để biết mã lỗi và chi tiết.' }
+        'ReinstallOEMActivating' { return 'Đang kích hoạt Windows online bằng slmgr /ato...' }
+        'ReinstallOEMActivated' { return 'Đã gửi yêu cầu kích hoạt Windows. Kiểm tra kết quả bằng slmgr /dlv hoặc Settings > System > Activation.' }
+        'ReinstallOEMActivateFailed' { return 'Kích hoạt online chưa hoàn tất (thường do máy chưa có mạng). Key đã được cài; chạy lại slmgr /ato khi máy đã online.' }
+        'ReinstallOEMSkippedActivation' { return 'Đã bỏ qua kích hoạt (-SkipOEMActivation). Key đã được cài; chạy slmgr /ato để kích hoạt khi sẵn sàng.' }
+        'ReinstallOEMWouldRun' { return 'Chế độ thử: key OEM nhúng sẽ được cài lại và kích hoạt. Không có thay đổi nào được thực hiện.' }
+        'ReinstallOEMNextStep' { return 'Key OEM nhúng đã được cài lại tự động từ firmware. Nếu Windows chưa kích hoạt, hãy nối mạng và chạy slmgr /ato, sau đó kiểm tra bằng slmgr /dlv.' }
+        'StepCheckLicense' { return 'Kiểm tra trạng thái license / kích hoạt Windows và Office' }
+        'LicenseCheckMode' { return 'Đang chạy chế độ chỉ kiểm tra trạng thái license/kích hoạt. Không dọn dẹp, không tạo restore point, không đổi key, không restart dịch vụ.' }
+        'CompletedLicenseCheck' { return "Hoàn tất lượt kiểm tra trạng thái license (chỉ đọc) của $script:ToolName." }
+        'LicenseWindowsTitle' { return 'Trạng thái license / kích hoạt Windows' }
+        'LicenseOfficeTitle' { return 'Trạng thái license / kích hoạt Office' }
+        'LicenseNoWindowsProduct' { return 'Không tìm thấy license Windows nào có product key đã cài.' }
+        'LicenseNoOffice' { return 'Không phát hiện bản Office (ospp.vbs) nào.' }
+        'LicenseChannelLabel' { return 'Kênh key' }
+        'LicenseStatusLabel' { return 'Trạng thái' }
+        'LicenseExpiryLabel' { return 'Hạn dùng' }
+        'LicensePartialKeyLabel' { return 'Key đã cài (5 ký tự cuối)' }
+        'LicenseGraceLabel' { return 'Ân hạn còn lại (phút)' }
+        'LicenseProductLabel' { return 'Sản phẩm' }
+        'ReportWindowsActivationHeading' { return 'Trạng thái kích hoạt Windows:' }
+        'ReportOfficeHeading' { return 'Trạng thái license Office:' }
+        'LicenseCheckNextStep' { return 'Đây là bước chỉ kiểm tra, không thay đổi gì. Windows ở trạng thái "Licensed" và Office ở "---LICENSED---" nghĩa là đã kích hoạt. Nếu là "Notification"/"Unlicensed" hoặc đang trong thời gian ân hạn thì Windows/Office chưa kích hoạt đầy đủ. Kênh key cho biết dạng license (OEM, Retail, Volume:MAK, hoặc Volume:GVLK cho máy client KMS).' }
         default { return $Key }
     }
 }
@@ -468,6 +553,9 @@ function Sync-ReportParameterSnapshot {
     $script:Report.Parameters.ReadOEMKeyOnly = [bool]$ReadOEMKeyOnly
     $script:Report.Parameters.ShowFullKeys = [bool]$ShowFullKeys
     $script:Report.Parameters.ExportSensitiveKeys = [bool]$ExportSensitiveKeys
+    $script:Report.Parameters.ReinstallOEMKey = [bool]$ReinstallOEMKey
+    $script:Report.Parameters.SkipOEMActivation = [bool]$SkipOEMActivation
+    $script:Report.Parameters.CheckLicenseOnly = [bool]$CheckLicenseOnly
     $script:Report.Parameters.LauncherMenu = [bool]$LauncherMenu
     $script:Report.Parameters.Language = $script:Language
 }
@@ -491,7 +579,10 @@ function Reset-LauncherRunOptions {
         'PostRebootSweep',
         'ReadOEMKeyOnly',
         'ShowFullKeys',
-        'ExportSensitiveKeys'
+        'ExportSensitiveKeys',
+        'ReinstallOEMKey',
+        'SkipOEMActivation',
+        'CheckLicenseOnly'
     )) {
         Set-Variable -Name $name -Scope Script -Value $false
     }
@@ -550,7 +641,8 @@ function Show-LauncherMenuVI {
     Write-Host '3. Chỉ dọn Office'
     Write-Host '4. Chỉ dọn Windows'
     Write-Host '5. Đọc key Windows OEM đi theo main / BIOS / UEFI'
-    Write-Host '6. Mở thư mục log và báo cáo'
+    Write-Host '6. Kiểm tra trạng thái license / kích hoạt Windows và Office (chỉ đọc)'
+    Write-Host '7. Mở thư mục log và báo cáo'
     Write-Host '0. Thoát'
     Write-Host ''
     Write-Host 'Giải thích nhanh:' -ForegroundColor Yellow
@@ -559,6 +651,7 @@ function Show-LauncherMenuVI {
     Write-Host '3 = Chỉ dọn Office, không ảnh hưởng Windows.'
     Write-Host '4 = Chỉ dọn Windows, không ảnh hưởng Office.'
     Write-Host '5 = Chỉ đọc key OEM, không kích hoạt, không thay đổi máy.'
+    Write-Host '6 = Chỉ xem Windows/Office đã kích hoạt hay chưa, dạng license gì. Không thay đổi máy.'
     Write-Host ''
 }
 
@@ -579,7 +672,8 @@ function Show-LauncherMenuEN {
     Write-Host '3. Clean Office only'
     Write-Host '4. Clean Windows only'
     Write-Host '5. Read OEM embedded key from motherboard / BIOS / UEFI'
-    Write-Host '6. Open logs and reports folder'
+    Write-Host '6. Check Windows and Office license / activation status (read-only)'
+    Write-Host '7. Open logs and reports folder'
     Write-Host '0. Exit'
     Write-Host ''
 }
@@ -661,6 +755,35 @@ function Confirm-WindowsKeyRemovalFromLauncher {
     return ($answer -match '^(?i)y$')
 }
 
+function Confirm-ReinstallOEMKeyFromLauncher {
+    [CmdletBinding()]
+    param()
+
+    Write-Host ''
+    if ($script:Language -eq 'en') {
+        Write-Host 'OEM KEY REINSTALL:' -ForegroundColor Cyan
+        Write-Host 'After cleanup, the tool can automatically reinstall the genuine Windows OEM key' -ForegroundColor Gray
+        Write-Host 'embedded in this machine BIOS/UEFI and activate it online, so you do not have to' -ForegroundColor Gray
+        Write-Host 'read the log and type the key by hand.' -ForegroundColor Gray
+        Write-Host ''
+        Write-Host 'This only runs if the machine actually has an embedded OEM key that matches the' -ForegroundColor Gray
+        Write-Host 'installed Windows edition. It is skipped otherwise.' -ForegroundColor Gray
+        Write-Host ''
+        $answer = Read-Host 'Auto-reinstall and activate the OEM key after cleanup? (Y/N)'
+    } else {
+        Write-Host 'CÀI LẠI KEY OEM:' -ForegroundColor Cyan
+        Write-Host 'Sau khi dọn, công cụ có thể tự động cài lại key Windows OEM chính hãng nhúng trong' -ForegroundColor Gray
+        Write-Host 'BIOS/UEFI của máy và kích hoạt online, để bạn không phải đọc log rồi nhập key thủ công.' -ForegroundColor Gray
+        Write-Host ''
+        Write-Host 'Chỉ chạy nếu máy thực sự có key OEM nhúng khớp với phiên bản Windows đang cài.' -ForegroundColor Gray
+        Write-Host 'Nếu không có thì bước này được bỏ qua.' -ForegroundColor Gray
+        Write-Host ''
+        $answer = Read-Host 'Tự động cài lại và kích hoạt key OEM sau khi dọn? (Y/N)'
+    }
+
+    return ($answer -match '^(?i)y$')
+}
+
 function Open-LogFolderFromLauncher {
     [CmdletBinding()]
     param()
@@ -680,10 +803,10 @@ function Invoke-LauncherMenu {
     while ($true) {
         if ($script:Language -eq 'en') {
             Show-LauncherMenuEN
-            $choice = Read-Host 'Enter choice [0-6]'
+            $choice = Read-Host 'Enter choice [0-7]'
         } else {
             Show-LauncherMenuVI
-            $choice = Read-Host 'Nhập lựa chọn [0-6]'
+            $choice = Read-Host 'Nhập lựa chọn [0-7]'
         }
 
         Reset-LauncherRunOptions
@@ -702,6 +825,9 @@ function Invoke-LauncherMenu {
                 if (-not (Confirm-WindowsKeyRemovalFromLauncher)) { continue }
                 Set-LauncherRunOption -Name 'CreateRestorePoint'
                 Set-LauncherRunOption -Name 'ForceWindowsProductKeyRemoval'
+                if (Confirm-ReinstallOEMKeyFromLauncher) {
+                    Set-LauncherRunOption -Name 'ReinstallOEMKey'
+                }
                 Sync-ReportParameterSnapshot
                 return $true
             }
@@ -717,6 +843,9 @@ function Invoke-LauncherMenu {
                 Set-LauncherRunOption -Name 'CreateRestorePoint'
                 Set-LauncherRunOption -Name 'SkipOffice'
                 Set-LauncherRunOption -Name 'ForceWindowsProductKeyRemoval'
+                if (Confirm-ReinstallOEMKeyFromLauncher) {
+                    Set-LauncherRunOption -Name 'ReinstallOEMKey'
+                }
                 Sync-ReportParameterSnapshot
                 return $true
             }
@@ -726,6 +855,11 @@ function Invoke-LauncherMenu {
                 return $true
             }
             '6' {
+                Set-LauncherRunOption -Name 'CheckLicenseOnly'
+                Sync-ReportParameterSnapshot
+                return $true
+            }
+            '7' {
                 Open-LogFolderFromLauncher
                 continue
             }
@@ -860,11 +994,27 @@ function Invoke-ExternalCommandSafe {
         [string]$Category = 'ExternalCommand',
         [string]$Target = '',
         [switch]$ReadOnly,
-        [switch]$AllowFailure
+        [switch]$AllowFailure,
+
+        # Values listed here (for example a raw product key) are replaced with a
+        # masked form in everything that is logged, reported, or returned, while
+        # the real value is still passed to the external process.
+        [string[]]$RedactArguments = @()
     )
 
+    $redactMap = @{}
+    foreach ($secret in @($RedactArguments)) {
+        if (-not [string]::IsNullOrWhiteSpace($secret) -and -not $redactMap.ContainsKey($secret)) {
+            $masked = Mask-ProductKey -ProductKey $secret
+            if ([string]::IsNullOrWhiteSpace($masked)) { $masked = '***REDACTED***' }
+            $redactMap[$secret] = $masked
+        }
+    }
+
     $quotedArgs = @($Arguments | ForEach-Object {
-        if ($_ -match '\s') { '"{0}"' -f $_ } else { $_ }
+        $display = $_
+        if ($redactMap.ContainsKey($display)) { $display = $redactMap[$display] }
+        if ($display -match '\s') { '"{0}"' -f $display } else { $display }
     })
     $commandForLog = ('{0} {1}' -f $FilePath, ($quotedArgs -join ' ')).Trim()
 
@@ -885,7 +1035,13 @@ function Invoke-ExternalCommandSafe {
         if ($null -eq $exitCode) {
             $exitCode = 0
         }
-        $lines = @($output | ForEach-Object { $_.ToString() })
+        $lines = @($output | ForEach-Object {
+            $text = $_.ToString()
+            foreach ($secret in $redactMap.Keys) {
+                $text = $text.Replace($secret, $redactMap[$secret])
+            }
+            $text
+        })
         foreach ($line in $lines) {
             Write-Log -Message "Output: $line" -Level 'VERBOSE'
         }
@@ -1197,6 +1353,24 @@ function Get-WindowsActivationState {
     }
 
     return @($items)
+}
+
+function Get-WindowsLicenseExpiry {
+    [CmdletBinding()]
+    param()
+
+    $slmgr = Join-Path $env:SystemRoot 'System32\slmgr.vbs'
+    $cscript = Join-Path $env:SystemRoot 'System32\cscript.exe'
+    if (-not (Test-Path -LiteralPath $slmgr)) {
+        return $null
+    }
+
+    $result = Invoke-ExternalCommandSafe -FilePath $cscript -Arguments @('//NoLogo', $slmgr, '/xpr') -Description 'Read Windows activation expiry with slmgr /xpr' -Category 'WindowsLicensing' -Target 'slmgr /xpr' -ReadOnly -AllowFailure
+    $lines = @($result.Output | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_.Trim() })
+    if ($lines.Count -eq 0) {
+        return $null
+    }
+    return ($lines -join ' ')
 }
 
 function Mask-ProductKey {
@@ -1526,7 +1700,157 @@ function Get-OEMEmbeddedProductKey {
         Compatibility = $compatibility
     })
 
-    return [pscustomobject]$info
+    # The returned object always carries the raw key so a caller (for example the
+    # OEM reinstall step) can use it in memory. This object is never serialized to
+    # disk; only $script:Report.OEMEmbeddedKeyInfo above is persisted, and that
+    # keeps the full key out unless -ExportSensitiveKeys was requested.
+    return [pscustomobject]@{
+        KeyFound = [bool]$keyFound
+        FullKey = $key
+        MaskedKey = $maskedKey
+        KeyDescription = $description
+        DetectedKeyEdition = $detectedEdition
+        CurrentWindowsEdition = $currentEdition.FriendlyName
+        Compatibility = $compatibility
+        Notes = $notes
+    }
+}
+
+function Install-OEMEmbeddedProductKey {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [object]$OEMInfo
+    )
+
+    $reinstall = $script:Report.OEMKeyReinstall
+    $reinstall.Requested = $true
+
+    Write-Host ''
+    Write-Host (Get-UiText -Key 'ReinstallOEMTitle') -ForegroundColor Cyan
+    Write-Log -Message (Get-UiText -Key 'ReinstallOEMTitle') -Level 'INFO'
+
+    # Read the OEM key now if the caller did not already provide it.
+    if ($null -eq $OEMInfo) {
+        $OEMInfo = Get-OEMEmbeddedProductKey
+    }
+
+    $keyFound = $false
+    $fullKey = $null
+    $compatibility = 'Unknown'
+    $maskedKey = $null
+    if ($null -ne $OEMInfo) {
+        if ($OEMInfo.PSObject.Properties.Name -contains 'KeyFound') { $keyFound = [bool]$OEMInfo.KeyFound }
+        if ($OEMInfo.PSObject.Properties.Name -contains 'FullKey') { $fullKey = [string]$OEMInfo.FullKey }
+        if ($OEMInfo.PSObject.Properties.Name -contains 'Compatibility') { $compatibility = [string]$OEMInfo.Compatibility }
+        if ($OEMInfo.PSObject.Properties.Name -contains 'MaskedKey') { $maskedKey = [string]$OEMInfo.MaskedKey }
+    }
+
+    $reinstall.KeyFound = $keyFound
+    $reinstall.Compatibility = $compatibility
+    $reinstall.MaskedKey = $maskedKey
+
+    if (-not $keyFound -or [string]::IsNullOrWhiteSpace($fullKey)) {
+        $msg = Get-UiText -Key 'ReinstallOEMNoKey'
+        Write-Host $msg -ForegroundColor Yellow
+        Write-Log -Message $msg -Level 'INFO'
+        $reinstall.InstallStatus = 'NoKey'
+        $null = $reinstall.Notes.Add($msg)
+        Add-ReportAction -Category 'OEMKeyReinstall' -Action 'Reinstall OEM embedded key' -Target 'slmgr /ipk' -Status 'Skipped' -Detail 'No OEM embedded key was available.' -Data $null
+        return
+    }
+
+    # An embedded OEM key that targets a different Windows edition will always be
+    # rejected by slmgr /ipk, so skip it by default and only try under -Force.
+    if ($compatibility -eq 'Not compatible' -and -not $Force) {
+        $msg = Get-UiText -Key 'ReinstallOEMNotCompatible'
+        Write-Host $msg -ForegroundColor Yellow
+        Write-Log -Message $msg -Level 'WARN'
+        $reinstall.InstallStatus = 'SkippedNotCompatible'
+        $null = $reinstall.Notes.Add($msg)
+        Add-ReportAction -Category 'OEMKeyReinstall' -Action 'Reinstall OEM embedded key' -Target 'slmgr /ipk' -Status 'Skipped' -Detail 'Embedded OEM key targets a different Windows edition; use -Force to override.' -Data ([pscustomobject]@{ Compatibility = $compatibility })
+        return
+    }
+
+    $slmgr = Join-Path $env:SystemRoot 'System32\slmgr.vbs'
+    $cscript = Join-Path $env:SystemRoot 'System32\cscript.exe'
+    if (-not (Test-Path -LiteralPath $slmgr)) {
+        Write-Log -Message "slmgr.vbs not found: $slmgr" -Level 'WARN'
+        $reinstall.InstallStatus = 'ToolMissing'
+        $null = $reinstall.Notes.Add('slmgr.vbs was not found.')
+        return
+    }
+
+    $reinstall.Attempted = $true
+    Write-Host (Get-UiText -Key 'ReinstallOEMInstalling') -ForegroundColor Gray
+    Write-Log -Message (Get-UiText -Key 'ReinstallOEMInstalling') -Level 'INFO'
+
+    # The raw key is passed to slmgr but redacted from the log, report, and output.
+    $ipk = Invoke-ExternalCommandSafe -FilePath $cscript -Arguments @('//NoLogo', $slmgr, '/ipk', $fullKey) -Description 'Install OEM embedded Windows product key with slmgr /ipk' -Category 'WindowsLicensing' -Target 'slmgr /ipk (OEM embedded key)' -AllowFailure -RedactArguments @($fullKey)
+
+    if ($ipk.SkippedDryRun) {
+        $msg = Get-UiText -Key 'ReinstallOEMWouldRun'
+        Write-Host $msg -ForegroundColor Yellow
+        Write-Log -Message $msg -Level 'INFO'
+        $reinstall.InstallStatus = 'WouldInstall'
+        $reinstall.ActivationStatus = 'WouldActivate'
+        $null = $reinstall.Notes.Add($msg)
+        return
+    }
+
+    $reinstall.InstallExitCode = $ipk.ExitCode
+    $ipkLooksError = ((@($ipk.Output) -join ' ') -match '0x[0-9A-Fa-f]{8}')
+    $installOk = ($ipk.ExitCode -eq 0) -and -not $ipkLooksError
+
+    if (-not $installOk) {
+        $msg = Get-UiText -Key 'ReinstallOEMInstallFailed'
+        Write-Host $msg -ForegroundColor Yellow
+        Write-Log -Message $msg -Level 'WARN'
+        $reinstall.InstallStatus = 'Failed'
+        $null = $reinstall.Notes.Add($msg)
+        return
+    }
+
+    $msg = Get-UiText -Key 'ReinstallOEMInstalled'
+    Write-Host $msg -ForegroundColor Green
+    Write-Log -Message $msg -Level 'SUCCESS'
+    $reinstall.InstallStatus = 'Installed'
+    $null = $reinstall.Notes.Add($msg)
+
+    if ($SkipOEMActivation) {
+        $msg = Get-UiText -Key 'ReinstallOEMSkippedActivation'
+        Write-Host $msg -ForegroundColor Yellow
+        Write-Log -Message $msg -Level 'INFO'
+        $reinstall.ActivationStatus = 'Skipped'
+        $null = $reinstall.Notes.Add($msg)
+        return
+    }
+
+    $reinstall.ActivationRequested = $true
+    Write-Host (Get-UiText -Key 'ReinstallOEMActivating') -ForegroundColor Gray
+    Write-Log -Message (Get-UiText -Key 'ReinstallOEMActivating') -Level 'INFO'
+
+    $ato = Invoke-ExternalCommandSafe -FilePath $cscript -Arguments @('//NoLogo', $slmgr, '/ato') -Description 'Activate Windows online with slmgr /ato' -Category 'WindowsLicensing' -Target 'slmgr /ato' -AllowFailure
+    $reinstall.ActivationExitCode = $ato.ExitCode
+    $atoLooksError = ((@($ato.Output) -join ' ') -match '0x[0-9A-Fa-f]{8}')
+    $activateOk = ($ato.ExitCode -eq 0) -and -not $atoLooksError
+
+    if ($activateOk) {
+        $msg = Get-UiText -Key 'ReinstallOEMActivated'
+        Write-Host $msg -ForegroundColor Green
+        Write-Log -Message $msg -Level 'SUCCESS'
+        $reinstall.ActivationStatus = 'Activated'
+        $null = $reinstall.Notes.Add($msg)
+    } else {
+        $msg = Get-UiText -Key 'ReinstallOEMActivateFailed'
+        Write-Host $msg -ForegroundColor Yellow
+        Write-Log -Message $msg -Level 'WARN'
+        $reinstall.ActivationStatus = 'ActivationFailed'
+        $null = $reinstall.Notes.Add($msg)
+    }
+
+    # Read-only verification of the resulting license state.
+    Invoke-ExternalCommandSafe -FilePath $cscript -Arguments @('//NoLogo', $slmgr, '/dlv') -Description 'Show Windows license status with slmgr /dlv' -Category 'WindowsLicensing' -Target 'slmgr /dlv' -ReadOnly -AllowFailure | Out-Null
 }
 
 function Test-WindowsActivationLooksKms {
@@ -2617,6 +2941,102 @@ function Get-OfficeInstalledKeys {
     return @($products)
 }
 
+function Invoke-LicenseStatusCheck {
+    [CmdletBinding()]
+    param()
+
+    $summary = $script:Report.LicenseStatusCheck
+    $summary.Requested = $true
+
+    # ---- Windows ----
+    Write-Host ''
+    Write-Host (Get-UiText -Key 'LicenseWindowsTitle') -ForegroundColor Cyan
+    Write-Log -Message (Get-UiText -Key 'LicenseWindowsTitle') -Level 'INFO'
+
+    $edition = Get-CurrentWindowsEdition
+    $summary.WindowsEdition = $edition.FriendlyName
+    Write-Host ("{0}: {1}" -f (Get-UiText -Key 'CurrentWindowsEditionLabel'), $edition.FriendlyName) -ForegroundColor Gray
+
+    $winState = @(Get-WindowsActivationState)
+    $script:Report.WindowsActivationBefore = $winState
+    $summary.WindowsProductCount = $winState.Count
+
+    if ($winState.Count -eq 0) {
+        Write-Host (Get-UiText -Key 'LicenseNoWindowsProduct') -ForegroundColor Yellow
+        Write-Log -Message (Get-UiText -Key 'LicenseNoWindowsProduct') -Level 'INFO'
+    } else {
+        foreach ($product in $winState) {
+            $name = if ([string]::IsNullOrWhiteSpace([string]$product.Name)) { $product.Description } else { $product.Name }
+            Write-Host ''
+            Write-Host ("  {0}: {1}" -f (Get-UiText -Key 'LicenseProductLabel'), $name) -ForegroundColor Gray
+            Write-Host ("  {0}: {1}" -f (Get-UiText -Key 'LicenseChannelLabel'), $(if ([string]::IsNullOrWhiteSpace([string]$product.ProductKeyChannel)) { Get-UiText -Key 'Unknown' } else { $product.ProductKeyChannel })) -ForegroundColor Gray
+            $statusColor = if ([int]$product.LicenseStatus -eq 1) { 'Green' } else { 'Yellow' }
+            Write-Host ("  {0}: {1}" -f (Get-UiText -Key 'LicenseStatusLabel'), $product.LicenseStatusText) -ForegroundColor $statusColor
+            if (-not [string]::IsNullOrWhiteSpace([string]$product.PartialProductKey)) {
+                Write-Host ("  {0}: XXXXX-XXXXX-XXXXX-XXXXX-{1}" -f (Get-UiText -Key 'LicensePartialKeyLabel'), $product.PartialProductKey) -ForegroundColor Gray
+            }
+            $grace = 0
+            if ($product.PSObject.Properties.Name -contains 'GracePeriodRemaining' -and $product.GracePeriodRemaining) {
+                $grace = [int]$product.GracePeriodRemaining
+            }
+            if ($grace -gt 0) {
+                Write-Host ("  {0}: {1}" -f (Get-UiText -Key 'LicenseGraceLabel'), $grace) -ForegroundColor Yellow
+            }
+        }
+    }
+
+    $expiry = Get-WindowsLicenseExpiry
+    $summary.WindowsExpiry = $expiry
+    if (-not [string]::IsNullOrWhiteSpace($expiry)) {
+        Write-Host ''
+        Write-Host ("{0}: {1}" -f (Get-UiText -Key 'LicenseExpiryLabel'), $expiry) -ForegroundColor Gray
+        Write-Log -Message ("Windows expiry: {0}" -f $expiry) -Level 'INFO'
+    }
+
+    # ---- Office (read-only) ----
+    Write-Host ''
+    Write-Host (Get-UiText -Key 'LicenseOfficeTitle') -ForegroundColor Cyan
+    Write-Log -Message (Get-UiText -Key 'LicenseOfficeTitle') -Level 'INFO'
+
+    $officeCount = 0
+    if ($SkipOffice) {
+        Write-Log -Message 'Office license status check skipped because -SkipOffice was specified.' -Level 'INFO'
+    } else {
+        $osppPaths = @(Find-OfficeOSPP)
+        if ($osppPaths.Count -eq 0) {
+            Write-Host (Get-UiText -Key 'LicenseNoOffice') -ForegroundColor Yellow
+            Write-Log -Message (Get-UiText -Key 'LicenseNoOffice') -Level 'INFO'
+        } else {
+            foreach ($ospp in $osppPaths) {
+                $officeProducts = @(Get-OfficeInstalledKeys -OSPPPath $ospp)
+                foreach ($product in $officeProducts) {
+                    $officeCount++
+                    $name = if ([string]::IsNullOrWhiteSpace([string]$product.LicenseName)) { $product.LicenseDescription } else { $product.LicenseName }
+                    Write-Host ''
+                    Write-Host ("  {0}: {1}" -f (Get-UiText -Key 'LicenseProductLabel'), $name) -ForegroundColor Gray
+                    $isLicensed = ([string]$product.LicenseStatus -match '(?i)LICENSED')
+                    $statusColor = if ($isLicensed) { 'Green' } else { 'Yellow' }
+                    Write-Host ("  {0}: {1}" -f (Get-UiText -Key 'LicenseStatusLabel'), $(if ([string]::IsNullOrWhiteSpace([string]$product.LicenseStatus)) { Get-UiText -Key 'Unknown' } else { $product.LicenseStatus })) -ForegroundColor $statusColor
+                    if (-not [string]::IsNullOrWhiteSpace([string]$product.LastFive)) {
+                        Write-Host ("  {0}: XXXXX-XXXXX-XXXXX-XXXXX-{1}" -f (Get-UiText -Key 'LicensePartialKeyLabel'), $product.LastFive) -ForegroundColor Gray
+                    }
+                }
+            }
+            if ($officeCount -eq 0) {
+                Write-Host (Get-UiText -Key 'LicenseNoOffice') -ForegroundColor Yellow
+            }
+        }
+    }
+    $summary.OfficeProductCount = $officeCount
+
+    Add-ReportAction -Category 'LicenseStatusCheck' -Action 'Check Windows and Office license/activation status' -Target 'SoftwareLicensingProduct + ospp.vbs /dstatusall' -Status 'Done' -Detail ('WindowsProducts={0}; OfficeProducts={1}' -f $winState.Count, $officeCount) -Data ([pscustomobject]@{
+        WindowsEdition = $edition.FriendlyName
+        WindowsExpiry = $expiry
+        WindowsProductCount = $winState.Count
+        OfficeProductCount = $officeCount
+    })
+}
+
 function Clear-OfficeProductKeys {
     [CmdletBinding()]
     param()
@@ -3408,6 +3828,49 @@ function New-PlainTextReport {
         }
         $null = $lines.Add(('  {0}: {1}' -f $key, $value))
     }
+    if ($script:Report.OEMKeyReinstall.Requested) {
+        $null = $lines.Add('')
+        $null = $lines.Add((Get-UiText -Key 'ReinstallOEMTitle'))
+        foreach ($key in $script:Report.OEMKeyReinstall.Keys) {
+            $value = $script:Report.OEMKeyReinstall[$key]
+            if ($value -is [System.Collections.IEnumerable] -and -not ($value -is [string])) {
+                $value = @($value) -join '; '
+            }
+            $null = $lines.Add(('  {0}: {1}' -f $key, $value))
+        }
+    }
+
+    $winList = @($script:Report.WindowsActivationAfter)
+    if ($winList.Count -eq 0) {
+        $winList = @($script:Report.WindowsActivationBefore)
+    }
+    $null = $lines.Add('')
+    $null = $lines.Add((Get-UiText -Key 'ReportWindowsActivationHeading'))
+    if ($winList.Count -eq 0) {
+        $null = $lines.Add(('  {0}' -f (Get-UiText -Key 'LicenseNoWindowsProduct')))
+    } else {
+        foreach ($product in $winList) {
+            $name = if ([string]::IsNullOrWhiteSpace([string]$product.Name)) { [string]$product.Description } else { [string]$product.Name }
+            $channel = if ([string]::IsNullOrWhiteSpace([string]$product.ProductKeyChannel)) { 'Unknown' } else { [string]$product.ProductKeyChannel }
+            $last5 = if ([string]::IsNullOrWhiteSpace([string]$product.PartialProductKey)) { '-----' } else { [string]$product.PartialProductKey }
+            $null = $lines.Add(('  - {0} | {1}: {2} | {3}: {4} | ...{5}' -f $name, (Get-UiText -Key 'LicenseStatusLabel'), $product.LicenseStatusText, (Get-UiText -Key 'LicenseChannelLabel'), $channel, $last5))
+        }
+    }
+
+    $officeList = @($script:Report.OfficeProducts)
+    $null = $lines.Add('')
+    $null = $lines.Add((Get-UiText -Key 'ReportOfficeHeading'))
+    if ($officeList.Count -eq 0) {
+        $null = $lines.Add(('  {0}' -f (Get-UiText -Key 'LicenseNoOffice')))
+    } else {
+        foreach ($product in $officeList) {
+            $name = if ([string]::IsNullOrWhiteSpace([string]$product.LicenseName)) { [string]$product.LicenseDescription } else { [string]$product.LicenseName }
+            $status = if ([string]::IsNullOrWhiteSpace([string]$product.LicenseStatus)) { 'Unknown' } else { [string]$product.LicenseStatus }
+            $last5 = if ([string]::IsNullOrWhiteSpace([string]$product.LastFive)) { '-----' } else { [string]$product.LastFive }
+            $null = $lines.Add(('  - {0} | {1}: {2} | ...{3}' -f $name, (Get-UiText -Key 'LicenseStatusLabel'), $status, $last5))
+        }
+    }
+
     $null = $lines.Add('')
     foreach ($line in (Get-DigitalLicenseNoteLines)) {
         $null = $lines.Add($line)
@@ -3484,13 +3947,16 @@ function Ensure-NextSteps {
         return
     }
 
-    $steps = @(
-        (Get-UiText -Key 'RestartComputerNextStep'),
-        (Get-UiText -Key 'WindowsActivationNextStep'),
-        (Get-UiText -Key 'M365NextStep'),
-        (Get-UiText -Key 'OfficeVolumeNextStep'),
-        (Get-UiText -Key 'OfficeRepairNextStep')
-    )
+    $steps = New-Object System.Collections.ArrayList
+    $reinstallStatus = [string]$script:Report.OEMKeyReinstall.InstallStatus
+    if ($reinstallStatus -eq 'Installed' -or $reinstallStatus -eq 'WouldInstall') {
+        $null = $steps.Add((Get-UiText -Key 'ReinstallOEMNextStep'))
+    }
+    $null = $steps.Add((Get-UiText -Key 'RestartComputerNextStep'))
+    $null = $steps.Add((Get-UiText -Key 'WindowsActivationNextStep'))
+    $null = $steps.Add((Get-UiText -Key 'M365NextStep'))
+    $null = $steps.Add((Get-UiText -Key 'OfficeVolumeNextStep'))
+    $null = $steps.Add((Get-UiText -Key 'OfficeRepairNextStep'))
 
     foreach ($step in $steps) {
         $null = $script:Report.NextSteps.Add($step)
@@ -3580,6 +4046,27 @@ function Invoke-Main {
         return
     }
 
+    if ($CheckLicenseOnly) {
+        Write-Step -Number 1 -Name (Get-UiText -Key 'StepPreflight')
+        $script:Report.OS = Get-WindowsOSInfo
+        Write-Log -Message (Get-UiText -Key 'LicenseCheckMode') -Level 'INFO'
+
+        Write-Step -Number 2 -Name (Get-UiText -Key 'StepCheckLicense')
+        Invoke-LicenseStatusCheck
+
+        $script:Report.NextSteps.Clear()
+        $null = $script:Report.NextSteps.Add((Get-UiText -Key 'LicenseCheckNextStep'))
+
+        Write-Step -Number 3 -Name (Get-UiText -Key 'StepGenerateReport')
+        Generate-ActivationReport
+
+        Write-Step -Number 4 -Name (Get-UiText -Key 'StepShowNextSteps')
+        Show-NextSteps
+
+        Write-Log -Message (Get-UiText -Key 'CompletedLicenseCheck') -Level 'SUCCESS'
+        return
+    }
+
     Write-Step -Number 1 -Name (Get-UiText -Key 'StepPreflight')
     Show-OfficeCloseWarning
     $script:Report.OS = Get-WindowsOSInfo
@@ -3606,6 +4093,11 @@ function Invoke-Main {
     } else {
         Clear-WindowsKMSConfiguration
         Clear-WindowsProductKey -ActivationStateBefore $script:Report.WindowsActivationBefore
+
+        if ($ReinstallOEMKey) {
+            $oemInfo = Get-OEMEmbeddedProductKey
+            Install-OEMEmbeddedProductKey -OEMInfo $oemInfo
+        }
     }
 
     Write-Step -Number 5 -Name (Get-UiText -Key 'StepClearOffice')
