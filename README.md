@@ -1,6 +1,13 @@
 # DeActive by MyPC
 
-Phiên bản: `1.6.0`
+Phiên bản: `1.7.0`
+
+## Thay đổi trong v1.7.0
+
+- **Đổi tên/branding cho bớt nhạy cảm:** File `Clean-MAS-Activation.ps1` → `DeActive-Engine.ps1`, `Clean-MAS-Activation.cmd` → `DeActive-Menu.cmd`. Thư mục dữ liệu `C:\ProgramData\LegitActivationCleaner` → `C:\ProgramData\DeActiveByMyPC` (log, report, backup, tên file report đều theo tên mới). File `DeActive-by-MyPC.bat` giữ nguyên là điểm chạy chính.
+- **Kiểm tra mạng trước khi kích hoạt:** Trước khi chạy `slmgr /ato` (bước kích hoạt sau khi cài lại key OEM), tool kiểm tra kết nối Internet. Nếu máy offline thì báo trước và bỏ qua kích hoạt (key vẫn được cài), thay vì để lệnh thất bại rồi mới biết.
+- **Kiểm tra Genuine sâu hơn:** Chế độ kiểm tra license (mục 6) giờ gọi API `SLIsGenuineLocal` (qua P/Invoke) để lấy trạng thái Genuine thật của Windows (Genuine / Invalid license / Tampered / Offline), chính xác hơn so với chỉ đọc `LicenseStatus`.
+- **Báo cáo HTML + tự dọn log cũ:** Ngoài JSON/TXT/CSV, tool tạo thêm báo cáo `.html` dễ đọc. Sau khi chạy xong (khi mở từ menu), có tùy chọn mở file HTML hoặc mở thư mục báo cáo. Tool cũng tự giữ lại 30 report/log gần nhất và xóa bớt file cũ hơn (không đụng tới thư mục backup).
 
 ## Thay đổi trong v1.6.0
 
@@ -71,7 +78,7 @@ Công cụ không kích hoạt lậu, không bypass bản quyền, không cài K
 Sau khi chạy, dữ liệu nằm tại:
 
 ```text
-C:\ProgramData\LegitActivationCleaner
+C:\ProgramData\DeActiveByMyPC
 ```
 
 Gồm:
@@ -106,7 +113,7 @@ Có hai chế độ liên quan tới key OEM, tách biệt rõ ràng:
 Ví dụ chỉ dọn Windows rồi tự cài lại và kích hoạt key OEM:
 
 ```text
-Clean-MAS-Activation.ps1 -SkipOffice -ForceWindowsProductKeyRemoval -ReinstallOEMKey
+DeActive-Engine.ps1 -SkipOffice -ForceWindowsProductKeyRemoval -ReinstallOEMKey
 ```
 
 ## Cam kết an toàn
@@ -124,8 +131,8 @@ DeActive by MyPC:
 ## File trong dự án
 
 - `DeActive-by-MyPC.bat` - launcher thương hiệu public.
-- `Clean-MAS-Activation.cmd` - menu chạy tool, hỗ trợ tiếng Việt/English.
-- `Clean-MAS-Activation.ps1` - script PowerShell chính.
+- `DeActive-Menu.cmd` - menu chạy tool, hỗ trợ tiếng Việt/English.
+- `DeActive-Engine.ps1` - script PowerShell chính.
 - `README.en.md` - tài liệu tiếng Anh.
 - `CHECKSUMS.sha256` - danh sách SHA256 của các file phát hành.
 

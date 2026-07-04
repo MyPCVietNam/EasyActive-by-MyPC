@@ -2,13 +2,13 @@
 setlocal EnableExtensions
 
 set "TOOL_NAME=DeActive by MyPC"
-set "TOOL_VERSION=1.6.0"
-set "LAC_ROOT=%ProgramData%\LegitActivationCleaner"
+set "TOOL_VERSION=1.7.0"
+set "LAC_ROOT=%ProgramData%\DeActiveByMyPC"
 
 title %TOOL_NAME%
 
 set "SCRIPT_DIR=%~dp0"
-set "PS1=%SCRIPT_DIR%Clean-MAS-Activation.ps1"
+set "PS1=%SCRIPT_DIR%DeActive-Engine.ps1"
 set "POWERSHELL=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 if exist "%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" (
     set "POWERSHELL=%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe"

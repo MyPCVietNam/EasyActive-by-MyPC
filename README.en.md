@@ -1,6 +1,13 @@
 # DeActive by MyPC
 
-Version: `1.6.0`
+Version: `1.7.0`
+
+## Changes in v1.7.0
+
+- **Rebranding for a less sensitive name:** `Clean-MAS-Activation.ps1` → `DeActive-Engine.ps1`, `Clean-MAS-Activation.cmd` → `DeActive-Menu.cmd`. The data folder `C:\ProgramData\LegitActivationCleaner` → `C:\ProgramData\DeActiveByMyPC` (logs, reports, backups, and report filenames all follow the new name). `DeActive-by-MyPC.bat` remains the main entry point.
+- **Connectivity check before activation:** Before running `slmgr /ato` (the activation step after reinstalling the OEM key), the tool tests internet connectivity. If the machine is offline it warns and skips activation (the key is still installed) instead of letting the command fail.
+- **Deeper genuine check:** The license-check mode (option 6) now calls the `SLIsGenuineLocal` API (via P/Invoke) to read the real Windows genuine state (Genuine / Invalid license / Tampered / Offline), which is more accurate than reading `LicenseStatus` alone.
+- **HTML report + log rotation:** In addition to JSON/TXT/CSV, the tool now writes a readable `.html` report. After a run (when launched from the menu), you can choose to open the HTML file or open the reports folder. The tool also keeps the 30 most recent reports/logs and prunes older ones (it never touches the backups folder).
 
 ## Changes in v1.6.0
 
@@ -81,7 +88,7 @@ Product keys are sensitive. By default, the console and reports show a masked ke
 Example — clean Windows only, then reinstall and activate the OEM key:
 
 ```text
-Clean-MAS-Activation.ps1 -SkipOffice -ForceWindowsProductKeyRemoval -ReinstallOEMKey
+DeActive-Engine.ps1 -SkipOffice -ForceWindowsProductKeyRemoval -ReinstallOEMKey
 ```
 
 ## Digital License / HWID Note
@@ -95,7 +102,7 @@ This is not a tool error.
 After running, data is stored under:
 
 ```text
-C:\ProgramData\LegitActivationCleaner
+C:\ProgramData\DeActiveByMyPC
 ```
 
 Included folders:
@@ -119,8 +126,8 @@ DeActive by MyPC:
 ## Project Files
 
 - `DeActive-by-MyPC.bat` - public branded launcher.
-- `Clean-MAS-Activation.cmd` - bilingual menu launcher.
-- `Clean-MAS-Activation.ps1` - main PowerShell implementation.
+- `DeActive-Menu.cmd` - bilingual menu launcher.
+- `DeActive-Engine.ps1` - main PowerShell implementation.
 - `README.md` - Vietnamese documentation.
 - `CHECKSUMS.sha256` - SHA256 list for release files.
 

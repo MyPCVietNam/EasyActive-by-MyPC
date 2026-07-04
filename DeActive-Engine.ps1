@@ -13,8 +13,8 @@
 
 .NOTES
     Requires Windows PowerShell 5.1 or later and Administrator rights.
-    Default log path: C:\ProgramData\LegitActivationCleaner\Logs
-    Default backup path: C:\ProgramData\LegitActivationCleaner\Backups
+    Default log path: C:\ProgramData\DeActiveByMyPC\Logs
+    Default backup path: C:\ProgramData\DeActiveByMyPC\Backups
 #>
 
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
@@ -48,14 +48,15 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
 $script:ToolName = 'DeActive by MyPC'
-$script:Version = '1.6.0'
+$script:Version = '1.7.0'
 $script:Language = $Language.ToLowerInvariant()
 $script:RunId = Get-Date -Format 'yyyyMMdd-HHmmss'
-$script:ProgramDataRoot = Join-Path $env:ProgramData 'LegitActivationCleaner'
+$script:ProgramDataRoot = Join-Path $env:ProgramData 'DeActiveByMyPC'
 $script:LogRoot = Join-Path $script:ProgramDataRoot 'Logs'
 $script:BackupRoot = Join-Path (Join-Path $script:ProgramDataRoot 'Backups') $script:RunId
 $script:ReportRoot = Join-Path $script:ProgramDataRoot 'Reports'
 $script:LogPath = $null
+$script:LastHtmlReportPath = $null
 $script:DryRunMode = [bool]($DryRun -or $WhatIfPreference)
 # Convert script-level -WhatIf into the tool's own dry-run mode. This keeps
 # logging, backups, and report generation usable while all destructive work is
@@ -70,7 +71,7 @@ $script:DetectedOhookArtifacts = @()
 $script:Report = [ordered]@{
     ToolName = $script:ToolName
     Version = $script:Version
-    ScriptName = 'Clean-MAS-Activation.ps1'
+    ScriptName = 'DeActive-Engine.ps1'
     RunId = $script:RunId
     StartTime = (Get-Date).ToString('o')
     EndTime = $null
@@ -101,6 +102,7 @@ $script:Report = [ordered]@{
         Requested = $false
         WindowsEdition = $null
         WindowsExpiry = $null
+        WindowsGenuine = $null
         WindowsProductCount = 0
         OfficeProductCount = 0
         Notes = New-Object System.Collections.ArrayList
@@ -166,7 +168,7 @@ function Initialize-RunStorage {
         }
     }
 
-    $script:LogPath = Join-Path $script:LogRoot ("LegitActivationCleaner-{0}.log" -f $script:RunId)
+    $script:LogPath = Join-Path $script:LogRoot ("DeActiveByMyPC-{0}.log" -f $script:RunId)
     New-Item -Path $script:LogPath -ItemType File -Force | Out-Null
 }
 
@@ -281,8 +283,10 @@ function Get-UiText {
             'CompatibilityLabel' { return 'Compatibility' }
             'Unknown' { return 'Unknown' }
             'NextStepsHeading' { return 'Next steps' }
-            'ReportTitle' { return 'LegitActivationCleaner report' }
+            'ReportTitle' { return 'DeActive by MyPC report' }
             'ReportOEMHeading' { return 'OEM embedded key info:' }
+            'ReportOSHeading' { return 'Operating system' }
+            'DryRunBadge' { return 'DRY-RUN' }
             'ReportActions' { return 'Actions' }
             'ReportWarnings' { return 'Warnings' }
             'ReportErrors' { return 'Errors' }
@@ -341,6 +345,15 @@ function Get-UiText {
             'ReportWindowsActivationHeading' { return 'Windows activation status:' }
             'ReportOfficeHeading' { return 'Office license status:' }
             'LicenseCheckNextStep' { return 'This was a read-only status check; nothing was changed. Windows status "Licensed" and Office status "---LICENSED---" mean activated. "Notification"/"Unlicensed" or a grace state means Windows/Office is not fully activated. The channel shows how it is licensed (OEM, Retail, Volume:MAK, or Volume:GVLK for KMS clients).' }
+            'ReinstallOEMCheckingNetwork' { return 'Checking internet connectivity before online activation...' }
+            'ReinstallOEMOffline' { return 'No internet connection detected, so online activation (slmgr /ato) was skipped. The OEM key is installed; connect to the internet and run slmgr /ato later to finish activation.' }
+            'LicenseGenuineLabel' { return 'Genuine check (SLIsGenuineLocal)' }
+            'GenuineUnavailable' { return 'Unavailable' }
+            'OpenReportPrompt' { return 'Open the report?' }
+            'OpenReportHtmlOption' { return '  1 = Open the HTML report' }
+            'OpenReportFolderOption' { return '  2 = Open the reports folder' }
+            'OpenReportNoOption' { return '  0 = No' }
+            'OpenReportInput' { return 'Enter choice' }
             default { return $Key }
         }
     }
@@ -361,8 +374,10 @@ function Get-UiText {
         'CompatibilityLabel' { return 'Mức tương thích' }
         'Unknown' { return 'Không xác định' }
         'NextStepsHeading' { return 'Bước tiếp theo' }
-        'ReportTitle' { return 'Báo cáo LegitActivationCleaner' }
+        'ReportTitle' { return 'Báo cáo DeActive by MyPC' }
         'ReportOEMHeading' { return 'Thông tin key OEM nhúng:' }
+        'ReportOSHeading' { return 'Hệ điều hành' }
+        'DryRunBadge' { return 'CHẠY THỬ' }
         'ReportActions' { return 'Thao tác' }
         'ReportWarnings' { return 'Cảnh báo' }
         'ReportErrors' { return 'Lỗi' }
@@ -421,6 +436,15 @@ function Get-UiText {
         'ReportWindowsActivationHeading' { return 'Trạng thái kích hoạt Windows:' }
         'ReportOfficeHeading' { return 'Trạng thái license Office:' }
         'LicenseCheckNextStep' { return 'Đây là bước chỉ kiểm tra, không thay đổi gì. Windows ở trạng thái "Licensed" và Office ở "---LICENSED---" nghĩa là đã kích hoạt. Nếu là "Notification"/"Unlicensed" hoặc đang trong thời gian ân hạn thì Windows/Office chưa kích hoạt đầy đủ. Kênh key cho biết dạng license (OEM, Retail, Volume:MAK, hoặc Volume:GVLK cho máy client KMS).' }
+        'ReinstallOEMCheckingNetwork' { return 'Đang kiểm tra kết nối mạng trước khi kích hoạt online...' }
+        'ReinstallOEMOffline' { return 'Không phát hiện kết nối mạng nên đã bỏ qua kích hoạt online (slmgr /ato). Key OEM đã được cài; hãy nối mạng và chạy slmgr /ato sau để hoàn tất kích hoạt.' }
+        'LicenseGenuineLabel' { return 'Kiểm tra Genuine (SLIsGenuineLocal)' }
+        'GenuineUnavailable' { return 'Không khả dụng' }
+        'OpenReportPrompt' { return 'Mở báo cáo?' }
+        'OpenReportHtmlOption' { return '  1 = Mở báo cáo HTML' }
+        'OpenReportFolderOption' { return '  2 = Mở thư mục báo cáo' }
+        'OpenReportNoOption' { return '  0 = Không' }
+        'OpenReportInput' { return 'Nhập lựa chọn' }
         default { return $Key }
     }
 }
@@ -1099,7 +1123,7 @@ function New-SystemRestorePointSafe {
 
     try {
         Write-Log -Message 'Doing: Create a System Restore Point' -Level 'INFO'
-        Checkpoint-Computer -Description ("LegitActivationCleaner {0}" -f $script:RunId) -RestorePointType 'MODIFY_SETTINGS'
+        Checkpoint-Computer -Description ("DeActiveByMyPC {0}" -f $script:RunId) -RestorePointType 'MODIFY_SETTINGS'
         Write-Log -Message 'Done: Create a System Restore Point' -Level 'SUCCESS'
         Add-ReportAction -Category 'RestorePoint' -Action 'Create a System Restore Point' -Target 'System Restore' -Status 'Done' -Detail '' -Data $null
     } catch {
@@ -1371,6 +1395,92 @@ function Get-WindowsLicenseExpiry {
         return $null
     }
     return ($lines -join ' ')
+}
+
+function Test-InternetConnectivity {
+    [CmdletBinding()]
+    param(
+        [string[]]$TargetHosts = @('www.microsoft.com', 'login.live.com'),
+        [int]$Port = 443,
+        [int]$TimeoutMs = 3000
+    )
+
+    foreach ($targetHost in $TargetHosts) {
+        $client = $null
+        try {
+            $client = New-Object System.Net.Sockets.TcpClient
+            $async = $client.BeginConnect($targetHost, $Port, $null, $null)
+            $waited = $async.AsyncWaitHandle.WaitOne($TimeoutMs, $false)
+            if ($waited -and $client.Connected) {
+                $client.EndConnect($async)
+                return $true
+            }
+        } catch {
+            # Try the next host.
+        } finally {
+            if ($client) {
+                try { $client.Close() } catch { }
+            }
+        }
+    }
+    return $false
+}
+
+function Get-WindowsGenuineStatus {
+    [CmdletBinding()]
+    param()
+
+    $result = [ordered]@{
+        Available = $false
+        State = $null
+        StateText = 'Unknown'
+        Hresult = $null
+    }
+
+    $stateMap = @{
+        0 = 'Genuine'
+        1 = 'Invalid license'
+        2 = 'Tampered'
+        3 = 'Offline (could not verify)'
+    }
+
+    try {
+        if (-not ([System.Management.Automation.PSTypeName]'DeActiveByMyPC.GenuineCheck').Type) {
+            $code = @'
+using System;
+using System.Runtime.InteropServices;
+namespace DeActiveByMyPC {
+    public static class GenuineCheck {
+        [DllImport("slc.dll", CharSet = CharSet.Unicode)]
+        private static extern int SLIsGenuineLocal(ref Guid pAppId, ref int pGenuineState, IntPtr pUIOptions);
+        public static int Check(out int state) {
+            Guid appId = new Guid("55c92734-d682-4d71-983e-d6ec3f16059f");
+            state = -1;
+            return SLIsGenuineLocal(ref appId, ref state, IntPtr.Zero);
+        }
+    }
+}
+'@
+            Add-Type -TypeDefinition $code -ErrorAction Stop
+        }
+
+        $state = -1
+        $hr = [DeActiveByMyPC.GenuineCheck]::Check([ref]$state)
+        $result.Available = $true
+        $result.Hresult = ('0x{0:X8}' -f $hr)
+        $result.State = $state
+        if ($hr -eq 0) {
+            $result.StateText = if ($stateMap.ContainsKey([int]$state)) { $stateMap[[int]$state] } else { 'Unknown' }
+        } else {
+            $result.StateText = ('Check failed (HRESULT 0x{0:X8})' -f $hr)
+        }
+    } catch {
+        Write-Log -Message "SLIsGenuineLocal genuine check unavailable: $($_.Exception.Message)" -Level 'VERBOSE'
+        $result.Available = $false
+        $result.StateText = (Get-UiText -Key 'GenuineUnavailable')
+    }
+
+    return [pscustomobject]$result
 }
 
 function Mask-ProductKey {
@@ -1826,27 +1936,37 @@ function Install-OEMEmbeddedProductKey {
         return
     }
 
-    $reinstall.ActivationRequested = $true
-    Write-Host (Get-UiText -Key 'ReinstallOEMActivating') -ForegroundColor Gray
-    Write-Log -Message (Get-UiText -Key 'ReinstallOEMActivating') -Level 'INFO'
-
-    $ato = Invoke-ExternalCommandSafe -FilePath $cscript -Arguments @('//NoLogo', $slmgr, '/ato') -Description 'Activate Windows online with slmgr /ato' -Category 'WindowsLicensing' -Target 'slmgr /ato' -AllowFailure
-    $reinstall.ActivationExitCode = $ato.ExitCode
-    $atoLooksError = ((@($ato.Output) -join ' ') -match '0x[0-9A-Fa-f]{8}')
-    $activateOk = ($ato.ExitCode -eq 0) -and -not $atoLooksError
-
-    if ($activateOk) {
-        $msg = Get-UiText -Key 'ReinstallOEMActivated'
-        Write-Host $msg -ForegroundColor Green
-        Write-Log -Message $msg -Level 'SUCCESS'
-        $reinstall.ActivationStatus = 'Activated'
-        $null = $reinstall.Notes.Add($msg)
-    } else {
-        $msg = Get-UiText -Key 'ReinstallOEMActivateFailed'
+    Write-Host (Get-UiText -Key 'ReinstallOEMCheckingNetwork') -ForegroundColor Gray
+    Write-Log -Message (Get-UiText -Key 'ReinstallOEMCheckingNetwork') -Level 'INFO'
+    if (-not (Test-InternetConnectivity)) {
+        $msg = Get-UiText -Key 'ReinstallOEMOffline'
         Write-Host $msg -ForegroundColor Yellow
         Write-Log -Message $msg -Level 'WARN'
-        $reinstall.ActivationStatus = 'ActivationFailed'
+        $reinstall.ActivationStatus = 'SkippedOffline'
         $null = $reinstall.Notes.Add($msg)
+    } else {
+        $reinstall.ActivationRequested = $true
+        Write-Host (Get-UiText -Key 'ReinstallOEMActivating') -ForegroundColor Gray
+        Write-Log -Message (Get-UiText -Key 'ReinstallOEMActivating') -Level 'INFO'
+
+        $ato = Invoke-ExternalCommandSafe -FilePath $cscript -Arguments @('//NoLogo', $slmgr, '/ato') -Description 'Activate Windows online with slmgr /ato' -Category 'WindowsLicensing' -Target 'slmgr /ato' -AllowFailure
+        $reinstall.ActivationExitCode = $ato.ExitCode
+        $atoLooksError = ((@($ato.Output) -join ' ') -match '0x[0-9A-Fa-f]{8}')
+        $activateOk = ($ato.ExitCode -eq 0) -and -not $atoLooksError
+
+        if ($activateOk) {
+            $msg = Get-UiText -Key 'ReinstallOEMActivated'
+            Write-Host $msg -ForegroundColor Green
+            Write-Log -Message $msg -Level 'SUCCESS'
+            $reinstall.ActivationStatus = 'Activated'
+            $null = $reinstall.Notes.Add($msg)
+        } else {
+            $msg = Get-UiText -Key 'ReinstallOEMActivateFailed'
+            Write-Host $msg -ForegroundColor Yellow
+            Write-Log -Message $msg -Level 'WARN'
+            $reinstall.ActivationStatus = 'ActivationFailed'
+            $null = $reinstall.Notes.Add($msg)
+        }
     }
 
     # Read-only verification of the resulting license state.
@@ -2265,7 +2385,7 @@ function Remove-StartupFolderItemsRelatedToMAS {
         }
 
         foreach ($item in $items) {
-            if ($item.Name.IndexOf('.LegitActivationCleaner.', [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            if ($item.Name.IndexOf('.DeActiveByMyPC.', [StringComparison]::OrdinalIgnoreCase) -ge 0) {
                 continue
             }
 
@@ -2522,8 +2642,8 @@ function Add-MASFileCandidate {
         return
     }
     $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
-    if ($item.Name.IndexOf('.LegitActivationCleaner.', [StringComparison]::OrdinalIgnoreCase) -ge 0) {
-        Write-Log -Message "Skipping prior LegitActivationCleaner backup artifact: $Path" -Level 'VERBOSE'
+    if ($item.Name.IndexOf('.DeActiveByMyPC.', [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+        Write-Log -Message "Skipping prior DeActiveByMyPC backup artifact: $Path" -Level 'VERBOSE'
         return
     }
     if (-not (Test-IsSafeActivationArtifactDeletion -Path $Path)) {
@@ -2992,6 +3112,12 @@ function Invoke-LicenseStatusCheck {
         Write-Host ("{0}: {1}" -f (Get-UiText -Key 'LicenseExpiryLabel'), $expiry) -ForegroundColor Gray
         Write-Log -Message ("Windows expiry: {0}" -f $expiry) -Level 'INFO'
     }
+
+    $genuine = Get-WindowsGenuineStatus
+    $summary.WindowsGenuine = $genuine.StateText
+    $genuineColor = if ($genuine.Available -and [int]([string]$genuine.State) -eq 0) { 'Green' } else { 'Yellow' }
+    Write-Host ("{0}: {1}" -f (Get-UiText -Key 'LicenseGenuineLabel'), $genuine.StateText) -ForegroundColor $genuineColor
+    Write-Log -Message ("Windows genuine check: {0} (HRESULT {1})" -f $genuine.StateText, $genuine.Hresult) -Level 'INFO'
 
     # ---- Office (read-only) ----
     Write-Host ''
@@ -3510,11 +3636,11 @@ function Rename-PathToBackupSafe {
         return $null
     }
 
-    $newLeaf = '{0}.LegitActivationCleaner.{1}.bak' -f $leaf, $script:RunId
+    $newLeaf = '{0}.DeActiveByMyPC.{1}.bak' -f $leaf, $script:RunId
     $destination = Join-Path $parent $newLeaf
     $i = 1
     while (Test-Path -LiteralPath $destination) {
-        $newLeaf = '{0}.LegitActivationCleaner.{1}.{2}.bak' -f $leaf, $script:RunId, $i
+        $newLeaf = '{0}.DeActiveByMyPC.{1}.{2}.bak' -f $leaf, $script:RunId, $i
         $destination = Join-Path $parent $newLeaf
         $i++
     }
@@ -3748,7 +3874,7 @@ function Install-PostRebootSweepTask {
     }
 
     $taskName = 'PostRebootSweep'
-    $taskPath = '\LegitActivationCleaner\'
+    $taskPath = '\DeActiveByMyPC\'
     $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -PostRebootSweep -SkipOffice -SkipOhookCleanup -NoRestartServices -VerboseLog -ExportReport' -f $scriptPath
 
@@ -3784,7 +3910,7 @@ function Remove-PostRebootSweepTask {
     param()
 
     $taskName = 'PostRebootSweep'
-    $taskPath = '\LegitActivationCleaner\'
+    $taskPath = '\DeActiveByMyPC\'
     try {
         $task = Get-ScheduledTask -TaskName $taskName -TaskPath $taskPath -ErrorAction Stop
     } catch {
@@ -3887,6 +4013,245 @@ function New-PlainTextReport {
     return ($lines -join [Environment]::NewLine)
 }
 
+function New-HtmlReport {
+    [CmdletBinding()]
+    param()
+
+    $esc = { param($v) if ($null -eq $v) { '' } else { [System.Security.SecurityElement]::Escape([string]$v) } }
+
+    $orderedRows = {
+        param($dict)
+        $rows = ''
+        foreach ($key in $dict.Keys) {
+            $value = $dict[$key]
+            if ($value -is [System.Collections.IEnumerable] -and -not ($value -is [string])) {
+                $value = @($value) -join '; '
+            }
+            $rows += ('<tr><th>{0}</th><td>{1}</td></tr>' -f (& $esc $key), (& $esc $value))
+        }
+        return $rows
+    }
+
+    $sb = New-Object System.Text.StringBuilder
+    $null = $sb.Append('<!DOCTYPE html><html lang="')
+    $null = $sb.Append((& $esc $script:Language))
+    $null = $sb.Append('"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>')
+    $null = $sb.Append((& $esc (Get-UiText -Key 'ReportTitle')))
+    $null = $sb.Append('</title><style>')
+    $null = $sb.Append('body{font-family:Segoe UI,Arial,sans-serif;margin:0;background:#f4f5f7;color:#1b1f23;}')
+    $null = $sb.Append('.wrap{max-width:960px;margin:0 auto;padding:24px;}')
+    $null = $sb.Append('h1{font-size:22px;margin:0;}')
+    $null = $sb.Append('.head{background:#0b5cad;color:#fff;padding:20px 24px;border-radius:10px 10px 0 0;}')
+    $null = $sb.Append('.head .sub{opacity:.85;font-size:13px;margin-top:4px;}')
+    $null = $sb.Append('.card{background:#fff;border:1px solid #e3e6ea;border-top:none;padding:18px 24px;}')
+    $null = $sb.Append('.card:last-child{border-radius:0 0 10px 10px;}')
+    $null = $sb.Append('h2{font-size:15px;text-transform:uppercase;letter-spacing:.04em;color:#0b5cad;border-bottom:2px solid #eef1f4;padding-bottom:6px;}')
+    $null = $sb.Append('table{width:100%;border-collapse:collapse;font-size:14px;}')
+    $null = $sb.Append('th,td{text-align:left;padding:7px 10px;border-bottom:1px solid #eef1f4;vertical-align:top;}')
+    $null = $sb.Append('th{color:#586069;font-weight:600;width:230px;}')
+    $null = $sb.Append('.tbl th{width:auto;color:#1b1f23;background:#f6f8fa;}')
+    $null = $sb.Append('.ok{color:#137333;font-weight:600;}.warn{color:#b06000;font-weight:600;}')
+    $null = $sb.Append('.pill{display:inline-block;padding:2px 9px;border-radius:12px;font-size:12px;}')
+    $null = $sb.Append('.pill.ok{background:#e6f4ea;}.pill.warn{background:#fef7e0;}')
+    $null = $sb.Append('.muted{color:#6a737d;font-size:12px;}ul{margin:6px 0 0 18px;}')
+    $null = $sb.Append('</style></head><body><div class="wrap">')
+
+    $dryLabel = if ($script:DryRunMode) { ' (' + (& $esc (Get-UiText -Key 'DryRunBadge')) + ')' } else { '' }
+    $null = $sb.Append('<div class="head"><h1>')
+    $null = $sb.Append((& $esc (Get-UiText -Key 'ReportTitle')))
+    $null = $sb.Append($dryLabel)
+    $null = $sb.Append('</h1><div class="sub">')
+    $null = $sb.Append((& $esc ('{0} v{1} · Run {2} · {3} → {4}' -f $script:ToolName, $script:Version, $script:RunId, $script:Report.StartTime, $script:Report.EndTime)))
+    $null = $sb.Append('</div></div>')
+
+    # OS
+    if ($script:Report.OS -and @($script:Report.OS.Keys).Count -gt 0) {
+        $null = $sb.Append('<div class="card"><h2>')
+        $null = $sb.Append((& $esc (Get-UiText -Key 'ReportOSHeading')))
+        $null = $sb.Append('</h2><table>')
+        $null = $sb.Append((& $orderedRows $script:Report.OS))
+        $null = $sb.Append('</table></div>')
+    }
+
+    # Windows activation
+    $winList = @($script:Report.WindowsActivationAfter)
+    if ($winList.Count -eq 0) { $winList = @($script:Report.WindowsActivationBefore) }
+    $null = $sb.Append('<div class="card"><h2>')
+    $null = $sb.Append((& $esc (Get-UiText -Key 'ReportWindowsActivationHeading')))
+    $null = $sb.Append('</h2>')
+    if ($script:Report.LicenseStatusCheck.Requested -and $script:Report.LicenseStatusCheck.WindowsGenuine) {
+        $null = $sb.Append('<p class="muted">')
+        $null = $sb.Append((& $esc ((Get-UiText -Key 'LicenseGenuineLabel') + ': ' + $script:Report.LicenseStatusCheck.WindowsGenuine)))
+        $null = $sb.Append('</p>')
+    }
+    if ($winList.Count -eq 0) {
+        $null = $sb.Append('<p class="muted">')
+        $null = $sb.Append((& $esc (Get-UiText -Key 'LicenseNoWindowsProduct')))
+        $null = $sb.Append('</p>')
+    } else {
+        $null = $sb.Append('<table class="tbl"><tr><th>')
+        $null = $sb.Append((& $esc (Get-UiText -Key 'LicenseProductLabel')))
+        $null = $sb.Append('</th><th>')
+        $null = $sb.Append((& $esc (Get-UiText -Key 'LicenseStatusLabel')))
+        $null = $sb.Append('</th><th>')
+        $null = $sb.Append((& $esc (Get-UiText -Key 'LicenseChannelLabel')))
+        $null = $sb.Append('</th><th>')
+        $null = $sb.Append((& $esc (Get-UiText -Key 'LicensePartialKeyLabel')))
+        $null = $sb.Append('</th></tr>')
+        foreach ($product in $winList) {
+            $name = if ([string]::IsNullOrWhiteSpace([string]$product.Name)) { [string]$product.Description } else { [string]$product.Name }
+            $channel = if ([string]::IsNullOrWhiteSpace([string]$product.ProductKeyChannel)) { 'Unknown' } else { [string]$product.ProductKeyChannel }
+            $last5 = if ([string]::IsNullOrWhiteSpace([string]$product.PartialProductKey)) { '-----' } else { [string]$product.PartialProductKey }
+            $cls = if ([int]$product.LicenseStatus -eq 1) { 'ok' } else { 'warn' }
+            $null = $sb.Append(('<tr><td>{0}</td><td><span class="pill {1}">{2}</span></td><td>{3}</td><td>...{4}</td></tr>' -f (& $esc $name), $cls, (& $esc $product.LicenseStatusText), (& $esc $channel), (& $esc $last5)))
+        }
+        $null = $sb.Append('</table>')
+    }
+    $null = $sb.Append('</div>')
+
+    # Office
+    $officeList = @($script:Report.OfficeProducts)
+    $null = $sb.Append('<div class="card"><h2>')
+    $null = $sb.Append((& $esc (Get-UiText -Key 'ReportOfficeHeading')))
+    $null = $sb.Append('</h2>')
+    if ($officeList.Count -eq 0) {
+        $null = $sb.Append('<p class="muted">')
+        $null = $sb.Append((& $esc (Get-UiText -Key 'LicenseNoOffice')))
+        $null = $sb.Append('</p>')
+    } else {
+        $null = $sb.Append('<table class="tbl"><tr><th>')
+        $null = $sb.Append((& $esc (Get-UiText -Key 'LicenseProductLabel')))
+        $null = $sb.Append('</th><th>')
+        $null = $sb.Append((& $esc (Get-UiText -Key 'LicenseStatusLabel')))
+        $null = $sb.Append('</th><th>')
+        $null = $sb.Append((& $esc (Get-UiText -Key 'LicensePartialKeyLabel')))
+        $null = $sb.Append('</th></tr>')
+        foreach ($product in $officeList) {
+            $name = if ([string]::IsNullOrWhiteSpace([string]$product.LicenseName)) { [string]$product.LicenseDescription } else { [string]$product.LicenseName }
+            $status = if ([string]::IsNullOrWhiteSpace([string]$product.LicenseStatus)) { 'Unknown' } else { [string]$product.LicenseStatus }
+            $last5 = if ([string]::IsNullOrWhiteSpace([string]$product.LastFive)) { '-----' } else { [string]$product.LastFive }
+            $cls = if ($status -match '(?i)LICENSED') { 'ok' } else { 'warn' }
+            $null = $sb.Append(('<tr><td>{0}</td><td><span class="pill {1}">{2}</span></td><td>...{3}</td></tr>' -f (& $esc $name), $cls, (& $esc $status), (& $esc $last5)))
+        }
+        $null = $sb.Append('</table>')
+    }
+    $null = $sb.Append('</div>')
+
+    # OEM embedded key
+    $null = $sb.Append('<div class="card"><h2>')
+    $null = $sb.Append((& $esc (Get-UiText -Key 'ReportOEMHeading')))
+    $null = $sb.Append('</h2><table>')
+    $null = $sb.Append((& $orderedRows $script:Report.OEMEmbeddedKeyInfo))
+    $null = $sb.Append('</table>')
+    if ($script:Report.OEMKeyReinstall.Requested) {
+        $null = $sb.Append('<h2 style="margin-top:16px;">')
+        $null = $sb.Append((& $esc (Get-UiText -Key 'ReinstallOEMTitle')))
+        $null = $sb.Append('</h2><table>')
+        $null = $sb.Append((& $orderedRows $script:Report.OEMKeyReinstall))
+        $null = $sb.Append('</table>')
+    }
+    $null = $sb.Append('</div>')
+
+    # Summary + next steps
+    $null = $sb.Append('<div class="card"><h2>')
+    $null = $sb.Append((& $esc (Get-UiText -Key 'ReportNextSteps')))
+    $null = $sb.Append('</h2><p>')
+    $null = $sb.Append((& $esc ('{0}: {1} · {2}: {3} · {4}: {5}' -f (Get-UiText -Key 'ReportActions'), $script:Report.Actions.Count, (Get-UiText -Key 'ReportWarnings'), $script:Report.Warnings.Count, (Get-UiText -Key 'ReportErrors'), $script:Report.Errors.Count)))
+    $null = $sb.Append('</p><ul>')
+    foreach ($step in $script:Report.NextSteps) {
+        $null = $sb.Append('<li>')
+        $null = $sb.Append((& $esc $step))
+        $null = $sb.Append('</li>')
+    }
+    $null = $sb.Append('</ul></div>')
+
+    $null = $sb.Append('</div></body></html>')
+    return $sb.ToString()
+}
+
+function Invoke-ReportRetention {
+    [CmdletBinding()]
+    param(
+        [int]$Keep = 30
+    )
+
+    if ($script:DryRunMode) {
+        return
+    }
+
+    $specs = @(
+        @{ Dir = $script:ReportRoot; Pattern = 'DeActiveByMyPC-*.json' },
+        @{ Dir = $script:ReportRoot; Pattern = 'DeActiveByMyPC-*.txt' },
+        @{ Dir = $script:ReportRoot; Pattern = 'DeActiveByMyPC-*.html' },
+        @{ Dir = $script:ReportRoot; Pattern = 'DeActiveByMyPC-Actions-*.csv' },
+        @{ Dir = $script:LogRoot; Pattern = 'DeActiveByMyPC-*.log' }
+    )
+
+    foreach ($spec in $specs) {
+        try {
+            if ([string]::IsNullOrWhiteSpace([string]$spec.Dir) -or -not (Test-Path -LiteralPath $spec.Dir)) {
+                continue
+            }
+            $files = @(Get-ChildItem -LiteralPath $spec.Dir -Filter $spec.Pattern -File -ErrorAction Stop | Sort-Object LastWriteTime -Descending)
+            if ($files.Count -le $Keep) {
+                continue
+            }
+            $old = @($files | Select-Object -Skip $Keep)
+            foreach ($file in $old) {
+                try {
+                    Remove-Item -LiteralPath $file.FullName -Force -ErrorAction Stop
+                    Write-Log -Message "Retention removed old report/log: $($file.FullName)" -Level 'VERBOSE'
+                } catch {
+                    Write-Log -Message "Retention could not remove $($file.FullName): $($_.Exception.Message)" -Level 'WARN'
+                }
+            }
+        } catch {
+            Write-Log -Message "Retention scan failed for $($spec.Dir): $($_.Exception.Message)" -Level 'WARN'
+        }
+    }
+}
+
+function Invoke-ReportOpenPrompt {
+    [CmdletBinding()]
+    param()
+
+    if (-not $LauncherMenu) {
+        return
+    }
+
+    $htmlPath = $script:LastHtmlReportPath
+    $hasHtml = (-not [string]::IsNullOrWhiteSpace([string]$htmlPath)) -and (Test-Path -LiteralPath $htmlPath)
+
+    Write-Host ''
+    Write-Host (Get-UiText -Key 'OpenReportPrompt') -ForegroundColor Cyan
+    if ($hasHtml) {
+        Write-Host (Get-UiText -Key 'OpenReportHtmlOption') -ForegroundColor Gray
+    }
+    Write-Host (Get-UiText -Key 'OpenReportFolderOption') -ForegroundColor Gray
+    Write-Host (Get-UiText -Key 'OpenReportNoOption') -ForegroundColor Gray
+
+    $valid = if ($hasHtml) { @('0', '1', '2') } else { @('0', '2') }
+    $choice = Read-Host (Get-UiText -Key 'OpenReportInput')
+    if ($choice -notin $valid) {
+        return
+    }
+
+    try {
+        if ($choice -eq '1' -and $hasHtml) {
+            Start-Process -FilePath $htmlPath | Out-Null
+        } elseif ($choice -eq '2') {
+            if (-not [string]::IsNullOrWhiteSpace([string]$script:ReportRoot)) {
+                if (-not (Test-Path -LiteralPath $script:ReportRoot)) {
+                    New-Item -Path $script:ReportRoot -ItemType Directory -Force | Out-Null
+                }
+                Start-Process -FilePath 'explorer.exe' -ArgumentList $script:ReportRoot | Out-Null
+            }
+        }
+    } catch {
+        Write-Log -Message "Could not open report location: $($_.Exception.Message)" -Level 'WARN'
+    }
+}
+
 function Generate-ActivationReport {
     [CmdletBinding()]
     param()
@@ -3894,7 +4259,7 @@ function Generate-ActivationReport {
     Ensure-NextSteps
     $script:Report.EndTime = (Get-Date).ToString('o')
 
-    $jsonPath = Join-Path $script:ReportRoot ("LegitActivationCleaner-{0}.json" -f $script:RunId)
+    $jsonPath = Join-Path $script:ReportRoot ("DeActiveByMyPC-{0}.json" -f $script:RunId)
     try {
         $script:Report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $jsonPath -Encoding UTF8 -Force
         $null = $script:Report.ReportFiles.Add($jsonPath)
@@ -3904,8 +4269,9 @@ function Generate-ActivationReport {
     }
 
     if ($ExportReport) {
-        $txtPath = Join-Path $script:ReportRoot ("LegitActivationCleaner-{0}.txt" -f $script:RunId)
-        $csvPath = Join-Path $script:ReportRoot ("LegitActivationCleaner-Actions-{0}.csv" -f $script:RunId)
+        $txtPath = Join-Path $script:ReportRoot ("DeActiveByMyPC-{0}.txt" -f $script:RunId)
+        $csvPath = Join-Path $script:ReportRoot ("DeActiveByMyPC-Actions-{0}.csv" -f $script:RunId)
+        $htmlPath = Join-Path $script:ReportRoot ("DeActiveByMyPC-{0}.html" -f $script:RunId)
 
         try {
             New-PlainTextReport | Set-Content -LiteralPath $txtPath -Encoding UTF8 -Force
@@ -3922,7 +4288,18 @@ function Generate-ActivationReport {
         } catch {
             Write-Log -Message "Failed to write CSV report: $($_.Exception.Message)" -Level 'WARN'
         }
+
+        try {
+            New-HtmlReport | Set-Content -LiteralPath $htmlPath -Encoding UTF8 -Force
+            $null = $script:Report.ReportFiles.Add($htmlPath)
+            $script:LastHtmlReportPath = $htmlPath
+            Write-Log -Message "HTML report written: $htmlPath" -Level 'SUCCESS'
+        } catch {
+            Write-Log -Message "Failed to write HTML report: $($_.Exception.Message)" -Level 'WARN'
+        }
     }
+
+    Invoke-ReportRetention
 }
 
 function Show-NextSteps {
@@ -4042,6 +4419,7 @@ function Invoke-Main {
         Write-Step -Number 4 -Name (Get-UiText -Key 'StepShowNextSteps')
         Show-NextSteps
 
+        Invoke-ReportOpenPrompt
         Write-Log -Message (Get-UiText -Key 'CompletedOEMRun') -Level 'SUCCESS'
         return
     }
@@ -4063,6 +4441,7 @@ function Invoke-Main {
         Write-Step -Number 4 -Name (Get-UiText -Key 'StepShowNextSteps')
         Show-NextSteps
 
+        Invoke-ReportOpenPrompt
         Write-Log -Message (Get-UiText -Key 'CompletedLicenseCheck') -Level 'SUCCESS'
         return
     }
@@ -4148,6 +4527,7 @@ function Invoke-Main {
     Write-Step -Number 11 -Name (Get-UiText -Key 'StepShowNextSteps')
     Show-NextSteps
 
+    Invoke-ReportOpenPrompt
     Write-Log -Message (Get-UiText -Key 'CompletedRun') -Level 'SUCCESS'
 }
 
