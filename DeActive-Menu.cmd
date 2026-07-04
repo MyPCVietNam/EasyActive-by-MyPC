@@ -2,7 +2,7 @@
 setlocal EnableExtensions
 
 set "TOOL_NAME=DeActive by MyPC"
-set "TOOL_VERSION=1.7.0"
+set "TOOL_VERSION=1.7.1"
 set "LAC_ROOT=%ProgramData%\DeActiveByMyPC"
 
 title %TOOL_NAME%

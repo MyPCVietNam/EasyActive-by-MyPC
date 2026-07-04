@@ -48,7 +48,7 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
 $script:ToolName = 'DeActive by MyPC'
-$script:Version = '1.7.0'
+$script:Version = '1.7.1'
 $script:Language = $Language.ToLowerInvariant()
 $script:RunId = Get-Date -Format 'yyyyMMdd-HHmmss'
 $script:ProgramDataRoot = Join-Path $env:ProgramData 'DeActiveByMyPC'
@@ -116,6 +116,7 @@ $script:Report = [ordered]@{
         Compatibility = 'Unknown'
         Notes = New-Object System.Collections.ArrayList
     }
+    OEMEmbeddedKeyChecked = $false
     OEMKeyReinstall = [ordered]@{
         Requested = $false
         Attempted = $false
@@ -1475,9 +1476,11 @@ namespace DeActiveByMyPC {
             $result.StateText = ('Check failed (HRESULT 0x{0:X8})' -f $hr)
         }
     } catch {
-        Write-Log -Message "SLIsGenuineLocal genuine check unavailable: $($_.Exception.Message)" -Level 'VERBOSE'
+        Write-Log -Message "SLIsGenuineLocal genuine check unavailable: $($_.Exception.Message)" -Level 'INFO'
         $result.Available = $false
-        $result.StateText = (Get-UiText -Key 'GenuineUnavailable')
+        $reason = [string]$_.Exception.Message
+        if ($reason.Length -gt 80) { $reason = $reason.Substring(0, 80) + '...' }
+        $result.StateText = if ([string]::IsNullOrWhiteSpace($reason)) { (Get-UiText -Key 'GenuineUnavailable') } else { ('{0}: {1}' -f (Get-UiText -Key 'GenuineUnavailable'), $reason) }
     }
 
     return [pscustomobject]$result
@@ -1770,6 +1773,7 @@ function Get-OEMEmbeddedProductKey {
     }
 
     $script:Report.OEMEmbeddedKeyInfo = $info
+    $script:Report.OEMEmbeddedKeyChecked = $true
 
     Write-NoteBlock -Lines (Get-OEMKeyNoteLines)
     Write-Host ''
@@ -3119,6 +3123,9 @@ function Invoke-LicenseStatusCheck {
     Write-Host ("{0}: {1}" -f (Get-UiText -Key 'LicenseGenuineLabel'), $genuine.StateText) -ForegroundColor $genuineColor
     Write-Log -Message ("Windows genuine check: {0} (HRESULT {1})" -f $genuine.StateText, $genuine.Hresult) -Level 'INFO'
 
+    # ---- OEM embedded key (read-only) ----
+    $oemInfo = Get-OEMEmbeddedProductKey
+
     # ---- Office (read-only) ----
     Write-Host ''
     Write-Host (Get-UiText -Key 'LicenseOfficeTitle') -ForegroundColor Cyan
@@ -3945,24 +3952,26 @@ function New-PlainTextReport {
     foreach ($key in $script:Report.OS.Keys) {
         $null = $lines.Add(('  {0}: {1}' -f $key, $script:Report.OS[$key]))
     }
-    $null = $lines.Add('')
-    $null = $lines.Add((Get-UiText -Key 'ReportOEMHeading'))
-    foreach ($key in $script:Report.OEMEmbeddedKeyInfo.Keys) {
-        $value = $script:Report.OEMEmbeddedKeyInfo[$key]
-        if ($value -is [System.Collections.IEnumerable] -and -not ($value -is [string])) {
-            $value = @($value) -join '; '
-        }
-        $null = $lines.Add(('  {0}: {1}' -f $key, $value))
-    }
-    if ($script:Report.OEMKeyReinstall.Requested) {
+    if ($script:Report.OEMEmbeddedKeyChecked) {
         $null = $lines.Add('')
-        $null = $lines.Add((Get-UiText -Key 'ReinstallOEMTitle'))
-        foreach ($key in $script:Report.OEMKeyReinstall.Keys) {
-            $value = $script:Report.OEMKeyReinstall[$key]
+        $null = $lines.Add((Get-UiText -Key 'ReportOEMHeading'))
+        foreach ($key in $script:Report.OEMEmbeddedKeyInfo.Keys) {
+            $value = $script:Report.OEMEmbeddedKeyInfo[$key]
             if ($value -is [System.Collections.IEnumerable] -and -not ($value -is [string])) {
                 $value = @($value) -join '; '
             }
             $null = $lines.Add(('  {0}: {1}' -f $key, $value))
+        }
+        if ($script:Report.OEMKeyReinstall.Requested) {
+            $null = $lines.Add('')
+            $null = $lines.Add((Get-UiText -Key 'ReinstallOEMTitle'))
+            foreach ($key in $script:Report.OEMKeyReinstall.Keys) {
+                $value = $script:Report.OEMKeyReinstall[$key]
+                if ($value -is [System.Collections.IEnumerable] -and -not ($value -is [string])) {
+                    $value = @($value) -join '; '
+                }
+                $null = $lines.Add(('  {0}: {1}' -f $key, $value))
+            }
         }
     }
 
@@ -3970,11 +3979,9 @@ function New-PlainTextReport {
     if ($winList.Count -eq 0) {
         $winList = @($script:Report.WindowsActivationBefore)
     }
-    $null = $lines.Add('')
-    $null = $lines.Add((Get-UiText -Key 'ReportWindowsActivationHeading'))
-    if ($winList.Count -eq 0) {
-        $null = $lines.Add(('  {0}' -f (Get-UiText -Key 'LicenseNoWindowsProduct')))
-    } else {
+    if ($winList.Count -gt 0) {
+        $null = $lines.Add('')
+        $null = $lines.Add((Get-UiText -Key 'ReportWindowsActivationHeading'))
         foreach ($product in $winList) {
             $name = if ([string]::IsNullOrWhiteSpace([string]$product.Name)) { [string]$product.Description } else { [string]$product.Name }
             $channel = if ([string]::IsNullOrWhiteSpace([string]$product.ProductKeyChannel)) { 'Unknown' } else { [string]$product.ProductKeyChannel }
@@ -3984,11 +3991,9 @@ function New-PlainTextReport {
     }
 
     $officeList = @($script:Report.OfficeProducts)
-    $null = $lines.Add('')
-    $null = $lines.Add((Get-UiText -Key 'ReportOfficeHeading'))
-    if ($officeList.Count -eq 0) {
-        $null = $lines.Add(('  {0}' -f (Get-UiText -Key 'LicenseNoOffice')))
-    } else {
+    if ($officeList.Count -gt 0) {
+        $null = $lines.Add('')
+        $null = $lines.Add((Get-UiText -Key 'ReportOfficeHeading'))
         foreach ($product in $officeList) {
             $name = if ([string]::IsNullOrWhiteSpace([string]$product.LicenseName)) { [string]$product.LicenseDescription } else { [string]$product.LicenseName }
             $status = if ([string]::IsNullOrWhiteSpace([string]$product.LicenseStatus)) { 'Unknown' } else { [string]$product.LicenseStatus }
@@ -4076,19 +4081,15 @@ function New-HtmlReport {
     # Windows activation
     $winList = @($script:Report.WindowsActivationAfter)
     if ($winList.Count -eq 0) { $winList = @($script:Report.WindowsActivationBefore) }
-    $null = $sb.Append('<div class="card"><h2>')
-    $null = $sb.Append((& $esc (Get-UiText -Key 'ReportWindowsActivationHeading')))
-    $null = $sb.Append('</h2>')
-    if ($script:Report.LicenseStatusCheck.Requested -and $script:Report.LicenseStatusCheck.WindowsGenuine) {
-        $null = $sb.Append('<p class="muted">')
-        $null = $sb.Append((& $esc ((Get-UiText -Key 'LicenseGenuineLabel') + ': ' + $script:Report.LicenseStatusCheck.WindowsGenuine)))
-        $null = $sb.Append('</p>')
-    }
-    if ($winList.Count -eq 0) {
-        $null = $sb.Append('<p class="muted">')
-        $null = $sb.Append((& $esc (Get-UiText -Key 'LicenseNoWindowsProduct')))
-        $null = $sb.Append('</p>')
-    } else {
+    if ($winList.Count -gt 0) {
+        $null = $sb.Append('<div class="card"><h2>')
+        $null = $sb.Append((& $esc (Get-UiText -Key 'ReportWindowsActivationHeading')))
+        $null = $sb.Append('</h2>')
+        if ($script:Report.LicenseStatusCheck.Requested -and $script:Report.LicenseStatusCheck.WindowsGenuine) {
+            $null = $sb.Append('<p class="muted">')
+            $null = $sb.Append((& $esc ((Get-UiText -Key 'LicenseGenuineLabel') + ': ' + $script:Report.LicenseStatusCheck.WindowsGenuine)))
+            $null = $sb.Append('</p>')
+        }
         $null = $sb.Append('<table class="tbl"><tr><th>')
         $null = $sb.Append((& $esc (Get-UiText -Key 'LicenseProductLabel')))
         $null = $sb.Append('</th><th>')
@@ -4105,20 +4106,15 @@ function New-HtmlReport {
             $cls = if ([int]$product.LicenseStatus -eq 1) { 'ok' } else { 'warn' }
             $null = $sb.Append(('<tr><td>{0}</td><td><span class="pill {1}">{2}</span></td><td>{3}</td><td>...{4}</td></tr>' -f (& $esc $name), $cls, (& $esc $product.LicenseStatusText), (& $esc $channel), (& $esc $last5)))
         }
-        $null = $sb.Append('</table>')
+        $null = $sb.Append('</table></div>')
     }
-    $null = $sb.Append('</div>')
 
     # Office
     $officeList = @($script:Report.OfficeProducts)
-    $null = $sb.Append('<div class="card"><h2>')
-    $null = $sb.Append((& $esc (Get-UiText -Key 'ReportOfficeHeading')))
-    $null = $sb.Append('</h2>')
-    if ($officeList.Count -eq 0) {
-        $null = $sb.Append('<p class="muted">')
-        $null = $sb.Append((& $esc (Get-UiText -Key 'LicenseNoOffice')))
-        $null = $sb.Append('</p>')
-    } else {
+    if ($officeList.Count -gt 0) {
+        $null = $sb.Append('<div class="card"><h2>')
+        $null = $sb.Append((& $esc (Get-UiText -Key 'ReportOfficeHeading')))
+        $null = $sb.Append('</h2>')
         $null = $sb.Append('<table class="tbl"><tr><th>')
         $null = $sb.Append((& $esc (Get-UiText -Key 'LicenseProductLabel')))
         $null = $sb.Append('</th><th>')
@@ -4133,24 +4129,25 @@ function New-HtmlReport {
             $cls = if ($status -match '(?i)LICENSED') { 'ok' } else { 'warn' }
             $null = $sb.Append(('<tr><td>{0}</td><td><span class="pill {1}">{2}</span></td><td>...{3}</td></tr>' -f (& $esc $name), $cls, (& $esc $status), (& $esc $last5)))
         }
-        $null = $sb.Append('</table>')
+        $null = $sb.Append('</table></div>')
     }
-    $null = $sb.Append('</div>')
 
     # OEM embedded key
-    $null = $sb.Append('<div class="card"><h2>')
-    $null = $sb.Append((& $esc (Get-UiText -Key 'ReportOEMHeading')))
-    $null = $sb.Append('</h2><table>')
-    $null = $sb.Append((& $orderedRows $script:Report.OEMEmbeddedKeyInfo))
-    $null = $sb.Append('</table>')
-    if ($script:Report.OEMKeyReinstall.Requested) {
-        $null = $sb.Append('<h2 style="margin-top:16px;">')
-        $null = $sb.Append((& $esc (Get-UiText -Key 'ReinstallOEMTitle')))
+    if ($script:Report.OEMEmbeddedKeyChecked) {
+        $null = $sb.Append('<div class="card"><h2>')
+        $null = $sb.Append((& $esc (Get-UiText -Key 'ReportOEMHeading')))
         $null = $sb.Append('</h2><table>')
-        $null = $sb.Append((& $orderedRows $script:Report.OEMKeyReinstall))
+        $null = $sb.Append((& $orderedRows $script:Report.OEMEmbeddedKeyInfo))
         $null = $sb.Append('</table>')
+        if ($script:Report.OEMKeyReinstall.Requested) {
+            $null = $sb.Append('<h2 style="margin-top:16px;">')
+            $null = $sb.Append((& $esc (Get-UiText -Key 'ReinstallOEMTitle')))
+            $null = $sb.Append('</h2><table>')
+            $null = $sb.Append((& $orderedRows $script:Report.OEMKeyReinstall))
+            $null = $sb.Append('</table>')
+        }
+        $null = $sb.Append('</div>')
     }
-    $null = $sb.Append('</div>')
 
     # Summary + next steps
     $null = $sb.Append('<div class="card"><h2>')

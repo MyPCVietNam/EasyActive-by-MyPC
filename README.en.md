@@ -1,6 +1,12 @@
 # DeActive by MyPC
 
-Version: `1.7.0`
+Version: `1.7.1`
+
+## Changes in v1.7.1
+
+- **Bug fix:** In license-check mode (menu 6), the report showed the "OEM embedded key info" section as empty (KeyFound=False) even when the machine has an OEM key, because that mode never read the OEM key. The license-check mode now also reads the OEM key, so the report shows the full details (MaskedKey, KeyDescription, DetectedKeyEdition, Compatibility, etc.).
+- **Cleaner reports:** Each report section (Windows / Office / OEM key) is now shown only when that mode actually gathered its data. For example, the "Read OEM key" mode (menu 5) no longer shows misleading empty Windows/Office sections.
+- **Easier genuine diagnostics:** When `SLIsGenuineLocal` cannot run, the report now shows the reason ("Unavailable: ...") instead of just "Unavailable", making the cause easier to find.
 
 ## Changes in v1.7.0
 

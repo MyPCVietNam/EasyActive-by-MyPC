@@ -1,6 +1,12 @@
 # DeActive by MyPC
 
-Phiên bản: `1.7.0`
+Phiên bản: `1.7.1`
+
+## Thay đổi trong v1.7.1
+
+- **Sửa lỗi:** Ở chế độ kiểm tra license (menu 6), báo cáo hiển thị mục "Thông tin key OEM nhúng" là rỗng (KeyFound=False) dù máy có key OEM. Nguyên nhân: chế độ này không đọc key OEM. Nay chế độ kiểm tra license đọc luôn key OEM, nên báo cáo hiển thị đầy đủ (MaskedKey, KeyDescription, DetectedKeyEdition, Compatibility…).
+- **Báo cáo gọn hơn:** Mỗi mục trong báo cáo (Windows / Office / key OEM) chỉ hiển thị khi chế độ đó thực sự có đọc dữ liệu. Ví dụ chế độ "Đọc key OEM" (menu 5) sẽ không còn hiện mục Windows/Office rỗng gây hiểu nhầm.
+- **Genuine dễ chẩn đoán hơn:** Khi `SLIsGenuineLocal` không chạy được, báo cáo hiện kèm lý do ("Không khả dụng: ...") thay vì chỉ "Không khả dụng", để dễ tìm nguyên nhân.
 
 ## Thay đổi trong v1.7.0
 
