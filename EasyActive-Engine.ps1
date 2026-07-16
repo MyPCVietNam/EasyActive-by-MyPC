@@ -1,6 +1,6 @@
 ﻿<# 
 .SYNOPSIS
-    DeActive by MyPC - conservative cleanup for MAS/KMS-style activation artifacts.
+    EasyActive by MyPC - conservative cleanup for MAS/KMS-style activation artifacts.
 
 .DESCRIPTION
     Removes clearly identified non-standard activation persistence/configuration from
@@ -13,8 +13,8 @@
 
 .NOTES
     Requires Windows PowerShell 5.1 or later and Administrator rights.
-    Default log path: C:\ProgramData\DeActiveByMyPC\Logs
-    Default backup path: C:\ProgramData\DeActiveByMyPC\Backups
+    Default log path: C:\ProgramData\EasyActiveByMyPC\Logs
+    Default backup path: C:\ProgramData\EasyActiveByMyPC\Backups
 #>
 
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
@@ -38,6 +38,7 @@ param(
     [switch]$ReinstallOEMKey,
     [switch]$SkipOEMActivation,
     [switch]$CheckLicenseOnly,
+    [switch]$AssessCrack,
     [switch]$LauncherMenu,
 
     [ValidateSet('vi', 'en')]
@@ -47,11 +48,11 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
-$script:ToolName = 'DeActive by MyPC'
-$script:Version = '1.7.1'
+$script:ToolName = 'EasyActive by MyPC'
+$script:Version = '1.8.4'
 $script:Language = $Language.ToLowerInvariant()
 $script:RunId = Get-Date -Format 'yyyyMMdd-HHmmss'
-$script:ProgramDataRoot = Join-Path $env:ProgramData 'DeActiveByMyPC'
+$script:ProgramDataRoot = Join-Path $env:ProgramData 'EasyActiveByMyPC'
 $script:LogRoot = Join-Path $script:ProgramDataRoot 'Logs'
 $script:BackupRoot = Join-Path (Join-Path $script:ProgramDataRoot 'Backups') $script:RunId
 $script:ReportRoot = Join-Path $script:ProgramDataRoot 'Reports'
@@ -63,15 +64,20 @@ $script:DryRunMode = [bool]($DryRun -or $WhatIfPreference)
 # still blocked by Invoke-SafeAction / Invoke-ExternalCommandSafe.
 $WhatIfPreference = $false
 $script:HadWarnings = $false
+$script:LoopAgain = $false
 $script:FatalError = $false
 $script:DetectedScheduledTasks = @()
 $script:DetectedMASFileArtifacts = @()
 $script:DetectedOhookArtifacts = @()
 
-$script:Report = [ordered]@{
+function New-ReportObject {
+    [CmdletBinding()]
+    param()
+
+    return [ordered]@{
     ToolName = $script:ToolName
     Version = $script:Version
-    ScriptName = 'DeActive-Engine.ps1'
+    ScriptName = 'EasyActive-Engine.ps1'
     RunId = $script:RunId
     StartTime = (Get-Date).ToString('o')
     EndTime = $null
@@ -95,6 +101,7 @@ $script:Report = [ordered]@{
         ReinstallOEMKey = [bool]$ReinstallOEMKey
         SkipOEMActivation = [bool]$SkipOEMActivation
         CheckLicenseOnly = [bool]$CheckLicenseOnly
+        AssessCrack = [bool]$AssessCrack
         LauncherMenu = [bool]$LauncherMenu
         Language = $script:Language
     }
@@ -106,6 +113,18 @@ $script:Report = [ordered]@{
         WindowsProductCount = 0
         OfficeProductCount = 0
         Notes = New-Object System.Collections.ArrayList
+    }
+    CrackAssessment = [ordered]@{
+        Requested = $false
+        Verdict = 'NotAssessed'
+        VerdictText = $null
+        Confidence = 'None'
+        ConfidenceText = $null
+        Reasons = New-Object System.Collections.ArrayList
+        Score = 0
+        DefiniteArtifact = $false
+        Incomplete = $false
+        Signals = New-Object System.Collections.ArrayList
     }
     OEMEmbeddedKeyInfo = [ordered]@{
         KeyFound = $false
@@ -133,6 +152,7 @@ $script:Report = [ordered]@{
     OS = [ordered]@{}
     WindowsActivationBefore = @()
     WindowsActivationAfter = @()
+    GenuineStatus = $null
     WindowsKeysRemoved = New-Object System.Collections.ArrayList
     OfficeProducts = New-Object System.Collections.ArrayList
     OfficeKeysRemoved = New-Object System.Collections.ArrayList
@@ -148,7 +168,10 @@ $script:Report = [ordered]@{
     Errors = New-Object System.Collections.ArrayList
     ReportFiles = New-Object System.Collections.ArrayList
     NextSteps = New-Object System.Collections.ArrayList
+    }
 }
+
+$script:Report = New-ReportObject
 
 function Test-IsAdministrator {
     [CmdletBinding()]
@@ -169,7 +192,7 @@ function Initialize-RunStorage {
         }
     }
 
-    $script:LogPath = Join-Path $script:LogRoot ("DeActiveByMyPC-{0}.log" -f $script:RunId)
+    $script:LogPath = Join-Path $script:LogRoot ("EasyActiveByMyPC-{0}.log" -f $script:RunId)
     New-Item -Path $script:LogPath -ItemType File -Force | Out-Null
 }
 
@@ -284,7 +307,7 @@ function Get-UiText {
             'CompatibilityLabel' { return 'Compatibility' }
             'Unknown' { return 'Unknown' }
             'NextStepsHeading' { return 'Next steps' }
-            'ReportTitle' { return 'DeActive by MyPC report' }
+            'ReportTitle' { return 'EasyActive by MyPC report' }
             'ReportOEMHeading' { return 'OEM embedded key info:' }
             'ReportOSHeading' { return 'Operating system' }
             'DryRunBadge' { return 'DRY-RUN' }
@@ -355,6 +378,59 @@ function Get-UiText {
             'OpenReportFolderOption' { return '  2 = Open the reports folder' }
             'OpenReportNoOption' { return '  0 = No' }
             'OpenReportInput' { return 'Enter choice' }
+            'StepAssessCrack' { return 'Assess Windows crack / license tampering traces' }
+            'AssessCrackMode' { return 'Read-only crack/license assessment is active. Nothing is cleaned or changed; the machine is only inspected.' }
+            'CompletedAssessment' { return "Completed $script:ToolName read-only crack/license assessment." }
+            'AsmTitle' { return 'Crack / license tampering assessment (read-only)' }
+            'AsmVerdictHeading' { return 'CONCLUSION' }
+            'AsmScoreLabel' { return 'Risk score' }
+            'AsmVerdictIncomplete' { return 'Note: some data could not be read, so this assessment may be incomplete.' }
+            'AsmVerdictClean' { return 'No crack traces detected. The machine looks genuine/clean based on the checks above.' }
+            'AsmVerdictSuspicious' { return 'SUSPICIOUS - only weak signals were found. Not conclusive; review the flagged items.' }
+            'AsmVerdictLikely' { return 'LIKELY using a crack - multiple tampering signals were found.' }
+            'AsmVerdictCracked' { return 'CRACK DETECTED - clear crack/activation-bypass artifacts are present.' }
+            'AsmInstallDate' { return 'Windows install date' }
+            'AsmActivationStatus' { return 'Activation status (WMI)' }
+            'AsmKmsClientChannel' { return 'KMS client key (GVLK)' }
+            'AsmKmsHost' { return 'KMS server config' }
+            'AsmKms38' { return 'KMS38 (2038 expiry)' }
+            'AsmKms38Signature' { return 'Activation expiry set far in the future' }
+            'AsmLicenseBios' { return 'License channel vs OEM/BIOS' }
+            'AsmHwid' { return 'HWID / digital license' }
+            'AsmToolFolders' { return 'Illegal tool folders/files' }
+            'AsmScheduledTasks' { return 'Illegal scheduled tasks' }
+            'AsmServices' { return 'Illegal services' }
+            'AsmServicesDisabled' { return 'Protection services disabled' }
+            'AsmRegistryTamper' { return 'Registry tampering (genuine block)' }
+            'AsmHostsFile' { return 'Hosts file blocking activation' }
+            'AsmOhook' { return 'Office crack (Ohook)' }
+            'AsmNoData' { return 'no data / could not read' }
+            'AsmNotDetected' { return 'not detected' }
+            'AsmKmsLocalEmulator' { return 'localhost/emulator - strong KMS-crack signal' }
+            'AsmKmsPrivate' { return 'private IP - could be enterprise KMS' }
+            'AsmOemMatches' { return 'OEM/BIOS entitlement matches edition' }
+            'AsmOemMismatch' { return 'embedded OEM key targets a different edition' }
+            'AsmNoOemKey' { return 'no embedded OEM key in firmware' }
+            'AsmHwidInconclusive' { return 'digital license present; HWID spoofing cannot be confirmed offline (informational only)' }
+            'AsmHwidNoSignal' { return 'no specific HWID signal' }
+            'AsmNextStep' { return 'This was a read-only assessment; nothing was changed. If crack traces were found, use the cleanup options (menu 2/4) to remove them and then re-license the machine properly. A single weak signal (e.g. one registry tweak) is not proof of a crack.' }
+            'ReportAssessmentHeading' { return 'Crack / license assessment:' }
+            'AsmColCheck' { return 'Check' }
+            'AsmColEvidence' { return 'Evidence' }
+            'AsmColConfidence' { return 'Confidence' }
+            'AsmGenuine' { return 'Genuine authenticity (SLIsGenuineLocal)' }
+            'AsmGenuineUnavailable' { return 'genuine check could not run' }
+            'AsmGenuineGenuine' { return 'Windows reports GENUINE' }
+            'AsmGenuineTampered' { return 'TAMPERED - licensing store was modified (crack signature)' }
+            'AsmGenuineForged' { return 'shows Licensed locally but genuine check says INVALID - forged/HWID-style activation' }
+            'AsmGenuineNotActivated' { return 'not activated (invalid license, but not a crack)' }
+            'AsmGenuineOffline' { return 'could not verify online' }
+            'AsmHwidForged' { return 'digital license with no OEM key AND genuine check not clean - possible HWID forgery' }
+            'AsmConfidenceLabel' { return 'Confidence' }
+            'AsmConfidenceHigh' { return 'High' }
+            'AsmConfidenceMedium' { return 'Medium' }
+            'AsmConfidenceLow' { return 'Low' }
+            'AsmReasonsLabel' { return 'Main reasons' }
             default { return $Key }
         }
     }
@@ -375,7 +451,7 @@ function Get-UiText {
         'CompatibilityLabel' { return 'Mức tương thích' }
         'Unknown' { return 'Không xác định' }
         'NextStepsHeading' { return 'Bước tiếp theo' }
-        'ReportTitle' { return 'Báo cáo DeActive by MyPC' }
+        'ReportTitle' { return 'Báo cáo EasyActive by MyPC' }
         'ReportOEMHeading' { return 'Thông tin key OEM nhúng:' }
         'ReportOSHeading' { return 'Hệ điều hành' }
         'DryRunBadge' { return 'CHẠY THỬ' }
@@ -446,6 +522,59 @@ function Get-UiText {
         'OpenReportFolderOption' { return '  2 = Mở thư mục báo cáo' }
         'OpenReportNoOption' { return '  0 = Không' }
         'OpenReportInput' { return 'Nhập lựa chọn' }
+        'StepAssessCrack' { return 'Đánh giá dấu vết crack / can thiệp bản quyền Windows' }
+        'AssessCrackMode' { return 'Đang chạy chế độ đánh giá crack/bản quyền chỉ đọc. Không dọn, không sửa gì; chỉ soi máy.' }
+        'CompletedAssessment' { return "Hoàn tất lượt đánh giá crack/bản quyền (chỉ đọc) của $script:ToolName." }
+        'AsmTitle' { return 'Đánh giá dấu vết crack / can thiệp bản quyền (chỉ đọc)' }
+        'AsmVerdictHeading' { return 'KẾT LUẬN' }
+        'AsmScoreLabel' { return 'Điểm rủi ro' }
+        'AsmVerdictIncomplete' { return 'Lưu ý: có dữ liệu không đọc được nên đánh giá này có thể chưa đầy đủ.' }
+        'AsmVerdictClean' { return 'Không phát hiện dấu vết crack. Dựa trên các mục kiểm tra ở trên, máy có vẻ chính hãng/sạch.' }
+        'AsmVerdictSuspicious' { return 'NGHI NGỜ - chỉ thấy tín hiệu yếu. Chưa đủ kết luận; hãy xem lại các mục bị đánh dấu.' }
+        'AsmVerdictLikely' { return 'NHIỀU KHẢ NĂNG đang dùng crack - có nhiều tín hiệu can thiệp.' }
+        'AsmVerdictCracked' { return 'PHÁT HIỆN CRACK - có dấu vết crack/bẻ khóa kích hoạt rõ ràng.' }
+        'AsmInstallDate' { return 'Ngày cài Windows' }
+        'AsmActivationStatus' { return 'Trạng thái kích hoạt (WMI)' }
+        'AsmKmsClientChannel' { return 'Key client KMS (GVLK)' }
+        'AsmKmsHost' { return 'Cấu hình máy chủ KMS' }
+        'AsmKms38' { return 'KMS38 (hạn 2038)' }
+        'AsmKms38Signature' { return 'Hạn kích hoạt bị đặt xa bất thường' }
+        'AsmLicenseBios' { return 'Kênh license đối chiếu OEM/BIOS' }
+        'AsmHwid' { return 'HWID / digital license' }
+        'AsmToolFolders' { return 'Thư mục/file tool lậu' }
+        'AsmScheduledTasks' { return 'Tác vụ lịch lậu' }
+        'AsmServices' { return 'Dịch vụ lậu' }
+        'AsmServicesDisabled' { return 'Dịch vụ bảo vệ bị tắt' }
+        'AsmRegistryTamper' { return 'Can thiệp Registry (chặn genuine)' }
+        'AsmHostsFile' { return 'File hosts chặn kích hoạt' }
+        'AsmOhook' { return 'Crack Office (Ohook)' }
+        'AsmNoData' { return 'không có dữ liệu / không đọc được' }
+        'AsmNotDetected' { return 'không phát hiện' }
+        'AsmKmsLocalEmulator' { return 'localhost/emulator - dấu hiệu crack KMS mạnh' }
+        'AsmKmsPrivate' { return 'IP nội bộ - có thể là KMS doanh nghiệp' }
+        'AsmOemMatches' { return 'Entitlement OEM/BIOS khớp phiên bản' }
+        'AsmOemMismatch' { return 'key OEM nhúng thuộc phiên bản khác' }
+        'AsmNoOemKey' { return 'không có key OEM nhúng trong firmware' }
+        'AsmHwidInconclusive' { return 'có digital license; không thể xác nhận HWID giả khi offline (chỉ tham khảo)' }
+        'AsmHwidNoSignal' { return 'không có tín hiệu HWID cụ thể' }
+        'AsmNextStep' { return 'Đây là bước chỉ đánh giá, không thay đổi gì. Nếu có dấu vết crack, dùng chức năng dọn (menu 2/4) để gỡ rồi cấp phép lại đúng cách cho máy. Một tín hiệu yếu đơn lẻ (ví dụ một khóa registry) chưa phải bằng chứng crack.' }
+        'ReportAssessmentHeading' { return 'Đánh giá crack / bản quyền:' }
+        'AsmColCheck' { return 'Hạng mục' }
+        'AsmColEvidence' { return 'Bằng chứng' }
+        'AsmColConfidence' { return 'Độ tin cậy' }
+        'AsmGenuine' { return 'Tính chính hãng (SLIsGenuineLocal)' }
+        'AsmGenuineUnavailable' { return 'không chạy được kiểm tra genuine' }
+        'AsmGenuineGenuine' { return 'Windows báo CHÍNH HÃNG' }
+        'AsmGenuineTampered' { return 'BỊ CAN THIỆP - kho license đã bị sửa (chữ ký crack)' }
+        'AsmGenuineForged' { return 'máy báo Licensed nhưng genuine nói INVALID - kích hoạt giả kiểu HWID' }
+        'AsmGenuineNotActivated' { return 'chưa kích hoạt (license không hợp lệ, nhưng không phải crack)' }
+        'AsmGenuineOffline' { return 'không kiểm tra online được' }
+        'AsmHwidForged' { return 'digital license, không có key OEM VÀ genuine không sạch - có thể là HWID giả' }
+        'AsmConfidenceLabel' { return 'Độ tin cậy' }
+        'AsmConfidenceHigh' { return 'Cao' }
+        'AsmConfidenceMedium' { return 'Trung bình' }
+        'AsmConfidenceLow' { return 'Thấp' }
+        'AsmReasonsLabel' { return 'Lý do chính' }
         default { return $Key }
     }
 }
@@ -581,6 +710,7 @@ function Sync-ReportParameterSnapshot {
     $script:Report.Parameters.ReinstallOEMKey = [bool]$ReinstallOEMKey
     $script:Report.Parameters.SkipOEMActivation = [bool]$SkipOEMActivation
     $script:Report.Parameters.CheckLicenseOnly = [bool]$CheckLicenseOnly
+    $script:Report.Parameters.AssessCrack = [bool]$AssessCrack
     $script:Report.Parameters.LauncherMenu = [bool]$LauncherMenu
     $script:Report.Parameters.Language = $script:Language
 }
@@ -607,7 +737,8 @@ function Reset-LauncherRunOptions {
         'ExportSensitiveKeys',
         'ReinstallOEMKey',
         'SkipOEMActivation',
-        'CheckLicenseOnly'
+        'CheckLicenseOnly',
+        'AssessCrack'
     )) {
         Set-Variable -Name $name -Scope Script -Value $false
     }
@@ -655,7 +786,7 @@ function Show-LauncherMenuVI {
 
     Clear-Host
     Write-Host '========================================' -ForegroundColor Cyan
-    Write-Host ("        DeActive by MyPC v{0}" -f $script:Version) -ForegroundColor Cyan
+    Write-Host ("        EasyActive by MyPC v{0}" -f $script:Version) -ForegroundColor Cyan
     Write-Host '  Dọn trạng thái kích hoạt Windows/Office' -ForegroundColor Cyan
     Write-Host '========================================' -ForegroundColor Cyan
     Write-Host ''
@@ -667,7 +798,8 @@ function Show-LauncherMenuVI {
     Write-Host '4. Chỉ dọn Windows'
     Write-Host '5. Đọc key Windows OEM đi theo main / BIOS / UEFI'
     Write-Host '6. Kiểm tra trạng thái license / kích hoạt Windows và Office (chỉ đọc)'
-    Write-Host '7. Mở thư mục log và báo cáo'
+    Write-Host '7. Đánh giá dấu vết crack / bản quyền Windows (chỉ đọc)'
+    Write-Host '8. Mở thư mục log và báo cáo'
     Write-Host '0. Thoát'
     Write-Host ''
     Write-Host 'Giải thích nhanh:' -ForegroundColor Yellow
@@ -677,6 +809,7 @@ function Show-LauncherMenuVI {
     Write-Host '4 = Chỉ dọn Windows, không ảnh hưởng Office.'
     Write-Host '5 = Chỉ đọc key OEM, không kích hoạt, không thay đổi máy.'
     Write-Host '6 = Chỉ xem Windows/Office đã kích hoạt hay chưa, dạng license gì. Không thay đổi máy.'
+    Write-Host '7 = Soi dấu vết crack (KMS/MAS/KMS38/HWID, hosts, registry, tác vụ...) và cho kết luận. Không thay đổi máy.'
     Write-Host ''
 }
 
@@ -686,7 +819,7 @@ function Show-LauncherMenuEN {
 
     Clear-Host
     Write-Host '================================================' -ForegroundColor Cyan
-    Write-Host ("        DeActive by MyPC v{0}" -f $script:Version) -ForegroundColor Cyan
+    Write-Host ("        EasyActive by MyPC v{0}" -f $script:Version) -ForegroundColor Cyan
     Write-Host '  Windows/Office activation cleanup' -ForegroundColor Cyan
     Write-Host '================================================' -ForegroundColor Cyan
     Write-Host ''
@@ -698,7 +831,8 @@ function Show-LauncherMenuEN {
     Write-Host '4. Clean Windows only'
     Write-Host '5. Read OEM embedded key from motherboard / BIOS / UEFI'
     Write-Host '6. Check Windows and Office license / activation status (read-only)'
-    Write-Host '7. Open logs and reports folder'
+    Write-Host '7. Assess Windows crack / license tampering traces (read-only)'
+    Write-Host '8. Open logs and reports folder'
     Write-Host '0. Exit'
     Write-Host ''
 }
@@ -726,13 +860,13 @@ function Confirm-OfficeAppsClosedFromLauncher {
         Write-Host "The following Office processes are still running: $runningNames" -ForegroundColor Yellow
         Write-Host 'They must be closed before Ohook DLL cleanup can work.' -ForegroundColor Yellow
         Write-Host ''
-        $answer = Read-Host 'Force-close all Office apps now? (Y=Yes / N=Cancel)'
+        $answer = Read-Host 'Force-close all Office apps now? (Y = yes / N = back to menu)'
     } else {
         Write-Host 'LƯU Ý:' -ForegroundColor Yellow
         Write-Host "Các tiến trình Office đang chạy: $runningNames" -ForegroundColor Yellow
         Write-Host 'Cần đóng trước khi dọn DLL Ohook có thể hoạt động đúng.' -ForegroundColor Yellow
         Write-Host ''
-        $answer = Read-Host 'Buộc đóng tất cả ứng dụng Office ngay? (Y=Có / N=Hủy)'
+        $answer = Read-Host 'Buộc đóng tất cả ứng dụng Office ngay? (Y = có / N = quay lại menu)'
     }
 
     if ($answer -notmatch '^(?i)y$') {
@@ -764,7 +898,7 @@ function Confirm-WindowsKeyRemovalFromLauncher {
         Write-Host ''
         Write-Host 'Continue only if you understand this action and have a valid key/account for reactivation.' -ForegroundColor Yellow
         Write-Host ''
-        $answer = Read-Host 'Do you want to continue? (Y/N)'
+        $answer = Read-Host 'Continue? (Y = continue / N = back to menu)'
     } else {
         Write-Host 'CẢNH BÁO:' -ForegroundColor Yellow
         Write-Host 'Tùy chọn này có thể gỡ product key Windows đang lưu trên máy.' -ForegroundColor Yellow
@@ -774,7 +908,7 @@ function Confirm-WindowsKeyRemovalFromLauncher {
         Write-Host ''
         Write-Host 'Chỉ tiếp tục nếu bạn đã hiểu thao tác này và có key/tài khoản bản quyền hợp lệ để kích hoạt lại.' -ForegroundColor Yellow
         Write-Host ''
-        $answer = Read-Host 'Bạn có muốn tiếp tục không? (Y/N)'
+        $answer = Read-Host 'Tiếp tục? (Y = tiếp tục / N = quay lại menu)'
     }
 
     return ($answer -match '^(?i)y$')
@@ -828,10 +962,10 @@ function Invoke-LauncherMenu {
     while ($true) {
         if ($script:Language -eq 'en') {
             Show-LauncherMenuEN
-            $choice = Read-Host 'Enter choice [0-7]'
+            $choice = Read-Host 'Enter choice [0-8]'
         } else {
             Show-LauncherMenuVI
-            $choice = Read-Host 'Nhập lựa chọn [0-7]'
+            $choice = Read-Host 'Nhập lựa chọn [0-8]'
         }
 
         Reset-LauncherRunOptions
@@ -885,6 +1019,11 @@ function Invoke-LauncherMenu {
                 return $true
             }
             '7' {
+                Set-LauncherRunOption -Name 'AssessCrack'
+                Sync-ReportParameterSnapshot
+                return $true
+            }
+            '8' {
                 Open-LogFolderFromLauncher
                 continue
             }
@@ -1124,7 +1263,7 @@ function New-SystemRestorePointSafe {
 
     try {
         Write-Log -Message 'Doing: Create a System Restore Point' -Level 'INFO'
-        Checkpoint-Computer -Description ("DeActiveByMyPC {0}" -f $script:RunId) -RestorePointType 'MODIFY_SETTINGS'
+        Checkpoint-Computer -Description ("EasyActiveByMyPC {0}" -f $script:RunId) -RestorePointType 'MODIFY_SETTINGS'
         Write-Log -Message 'Done: Create a System Restore Point' -Level 'SUCCESS'
         Add-ReportAction -Category 'RestorePoint' -Action 'Create a System Restore Point' -Target 'System Restore' -Status 'Done' -Detail '' -Data $null
     } catch {
@@ -1446,11 +1585,11 @@ function Get-WindowsGenuineStatus {
     }
 
     try {
-        if (-not ([System.Management.Automation.PSTypeName]'DeActiveByMyPC.GenuineCheck').Type) {
+        if (-not ([System.Management.Automation.PSTypeName]'EasyActiveByMyPC.GenuineCheck').Type) {
             $code = @'
 using System;
 using System.Runtime.InteropServices;
-namespace DeActiveByMyPC {
+namespace EasyActiveByMyPC {
     public static class GenuineCheck {
         [DllImport("slc.dll", CharSet = CharSet.Unicode)]
         private static extern int SLIsGenuineLocal(ref Guid pAppId, ref int pGenuineState, IntPtr pUIOptions);
@@ -1466,7 +1605,7 @@ namespace DeActiveByMyPC {
         }
 
         $state = -1
-        $hr = [DeActiveByMyPC.GenuineCheck]::Check([ref]$state)
+        $hr = [EasyActiveByMyPC.GenuineCheck]::Check([ref]$state)
         $result.Available = $true
         $result.Hresult = ('0x{0:X8}' -f $hr)
         $result.State = $state
@@ -2389,7 +2528,7 @@ function Remove-StartupFolderItemsRelatedToMAS {
         }
 
         foreach ($item in $items) {
-            if ($item.Name.IndexOf('.DeActiveByMyPC.', [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            if ($item.Name.IndexOf('.EasyActiveByMyPC.', [StringComparison]::OrdinalIgnoreCase) -ge 0) {
                 continue
             }
 
@@ -2514,9 +2653,26 @@ function Test-MASArtifactName {
         'AutoKMS',
         'KMSAuto',
         'KMS_VL_ALL',
+        'KMSpico',
+        'KMSTools',
+        'KMSCleaner',
+        'Ratiborus',
+        'HWIDGEN',
+        'HWID-Gen',
+        'HWID_Activation',
+        'Microsoft-Activation-Scripts',
+        'MAS_AIO',
+        'Re-Loader',
+        'ReLoader',
+        'Microsoft Toolkit',
+        'MicrosoftToolkit',
+        'AAct',
+        'W10 Digital Activation',
+        'W10DigitalActivation',
         'Activation-Renewal',
         'Online_KMS_Activation',
         'Online_KMS_Activation_Script',
+        'SppExtComObjHook',
         'R@1n-KMS'
     )
 
@@ -2562,6 +2718,16 @@ function Test-MASPersistenceText {
         'R@1n-KMS',
         'AutoKMS',
         'KMSAuto',
+        'KMSpico',
+        'KMSTools',
+        'Ratiborus',
+        'HWIDGEN',
+        'Microsoft-Activation-Scripts',
+        'MAS_AIO',
+        'Re-Loader',
+        'Microsoft Toolkit',
+        'AAct',
+        'SppExtComObjHook',
         'KMS_VL_ALL'
     )
 
@@ -2646,8 +2812,8 @@ function Add-MASFileCandidate {
         return
     }
     $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
-    if ($item.Name.IndexOf('.DeActiveByMyPC.', [StringComparison]::OrdinalIgnoreCase) -ge 0) {
-        Write-Log -Message "Skipping prior DeActiveByMyPC backup artifact: $Path" -Level 'VERBOSE'
+    if ($item.Name.IndexOf('.EasyActiveByMyPC.', [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+        Write-Log -Message "Skipping prior EasyActiveByMyPC backup artifact: $Path" -Level 'VERBOSE'
         return
     }
     if (-not (Test-IsSafeActivationArtifactDeletion -Path $Path)) {
@@ -2788,6 +2954,166 @@ function Remove-MASFilesAndFolders {
                 Mode = if ($script:DryRunMode) { 'WouldRename' } else { 'Renamed' }
             })
         }
+    }
+}
+
+function Remove-GenuineBlockingRegistry {
+    [CmdletBinding()]
+    param()
+
+    Write-Log -Message 'Checking for genuine-blocking registry tweaks (NoGenTicket / NoAcquireGT).' -Level 'INFO'
+    # These policy values suppress Windows genuine-ticket generation; crack tools add them.
+    # Removing them restores the machine ability to validate genuinely. Exact key varies by
+    # build, so all plausible locations are checked; Remove-RegistryValuesSafe skips absent ones.
+    $paths = @(
+        'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SoftwareProtectionPlatform',
+        'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\CurrentVersion\Software Protection Platform',
+        'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Software Protection Platform'
+    )
+    foreach ($p in $paths) {
+        Remove-RegistryValuesSafe -KeyPath $p -ValueNames @('NoGenTicket', 'NoAcquireGT') -Category 'GenuineBlockRegistry'
+    }
+}
+
+function Restore-DisabledLicensingServices {
+    [CmdletBinding()]
+    param()
+
+    Write-Log -Message 'Checking protection services for a disabled (crack-tampered) start type.' -Level 'INFO'
+    # Default start types: sppsvc = Manual(3), ClipSVC = Manual(3), osppsvc = Manual(3).
+    # Only services that are currently Disabled (Start=4) are restored; healthy machines are untouched.
+    $services = @(
+        [pscustomobject]@{ Name = 'sppsvc'; Default = 3 },
+        [pscustomobject]@{ Name = 'ClipSVC'; Default = 3 },
+        [pscustomobject]@{ Name = 'osppsvc'; Default = 3 }
+    )
+
+    foreach ($svc in $services) {
+        $keyPath = "HKLM:\SYSTEM\CurrentControlSet\Services\$($svc.Name)"
+        if (-not (Test-Path -LiteralPath $keyPath)) {
+            Write-Log -Message "Service not present, skipped: $($svc.Name)" -Level 'VERBOSE'
+            continue
+        }
+
+        $start = $null
+        try {
+            $start = (Get-ItemProperty -LiteralPath $keyPath -Name 'Start' -ErrorAction Stop).'Start'
+        } catch {
+            Write-Log -Message "Could not read Start type for $($svc.Name): $($_.Exception.Message)" -Level 'WARN'
+            continue
+        }
+        if ($null -eq $start -or [int]$start -ne 4) {
+            Write-Log -Message "Service $($svc.Name) is not disabled; no change needed." -Level 'VERBOSE'
+            continue
+        }
+
+        $backup = Export-RegistryKeySafe -RegistryPath $keyPath -Reason "Backup before re-enabling $($svc.Name)"
+        if (-not $script:DryRunMode -and -not $backup) {
+            if ($Force) {
+                Write-Log -Message "Registry backup failed but -Force specified; continuing: $($svc.Name)" -Level 'WARN'
+            } else {
+                Write-Log -Message "Skipping service restore because backup failed: $($svc.Name)" -Level 'WARN'
+                continue
+            }
+        }
+
+        $svcName = [string]$svc.Name
+        $defaultStart = [int]$svc.Default
+        $localKeyPath = $keyPath
+        $data = [pscustomobject]@{ Service = $svcName; FromStart = 4; ToStart = $defaultStart; Backup = $backup }
+        Invoke-SafeAction -Description "Re-enable protection service $svcName (Start 4 -> $defaultStart)" -Category 'ServiceRestore' -Target $svcName -Data $data -Action {
+            Set-ItemProperty -LiteralPath $localKeyPath -Name 'Start' -Value $defaultStart -Type DWord -ErrorAction Stop
+        } | Out-Null
+
+        Add-ReportListItem -ListName 'ServicesReEnabled' -Item $data
+    }
+}
+
+function Remove-HostsActivationBlocks {
+    [CmdletBinding()]
+    param()
+
+    $hostsPath = Join-Path $env:SystemRoot 'System32\drivers\etc\hosts'
+    if (-not (Test-Path -LiteralPath $hostsPath)) {
+        Write-Log -Message 'Hosts file not found; nothing to clean.' -Level 'VERBOSE'
+        return
+    }
+
+    $activationDomains = @(
+        'sls.microsoft.com', 'activation.sls', 'activation-v2.sls', 'sls.update.microsoft.com',
+        'licensing.mp.microsoft.com', 'licensing.md.mp.microsoft.com', 'validation.sls',
+        'displaycatalog.mp.microsoft.com', 'activation.microsoft.com'
+    )
+
+    $lines = $null
+    try {
+        $lines = @(Get-Content -LiteralPath $hostsPath -ErrorAction Stop)
+    } catch {
+        Write-Log -Message "Could not read hosts file: $($_.Exception.Message)" -Level 'WARN'
+        return
+    }
+
+    $removed = New-Object System.Collections.ArrayList
+    $kept = New-Object System.Collections.ArrayList
+    foreach ($raw in $lines) {
+        $line = [string]$raw
+        $trimmed = $line.Trim()
+        $isBlock = $false
+        if (-not [string]::IsNullOrWhiteSpace($trimmed) -and -not $trimmed.StartsWith('#')) {
+            $parts = $trimmed -split '\s+'
+            if ($parts.Count -ge 2 -and ($parts[0] -match '^(0\.0\.0\.0|127\.\d{1,3}\.\d{1,3}\.\d{1,3}|::)')) {
+                for ($i = 1; $i -lt $parts.Count; $i++) {
+                    $hostName = $parts[$i]
+                    if ($hostName.StartsWith('#')) { break }
+                    foreach ($domain in $activationDomains) {
+                        if ($hostName.IndexOf($domain, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                            $isBlock = $true
+                            break
+                        }
+                    }
+                    if ($isBlock) { break }
+                }
+            }
+        }
+        if ($isBlock) { $null = $removed.Add($line) } else { $null = $kept.Add($line) }
+    }
+
+    if ($removed.Count -eq 0) {
+        Write-Log -Message 'No Microsoft-activation-blocking entries found in hosts file.' -Level 'INFO'
+        return
+    }
+
+    $backupPath = Join-Path $script:BackupRoot ('hosts-{0}.bak' -f $script:RunId)
+    if ($script:DryRunMode) {
+        foreach ($r in $removed) {
+            Write-Log -Message "Would remove hosts entry: $r" -Level 'INFO'
+            Add-ReportAction -Category 'HostsCleanup' -Action 'Remove hosts activation block' -Target ([string]$r).Trim() -Status 'WouldDo' -Detail "Backup would be written to $backupPath" -Data $null
+        }
+        return
+    }
+
+    $backupOk = $false
+    try {
+        Copy-Item -LiteralPath $hostsPath -Destination $backupPath -Force -ErrorAction Stop
+        $backupOk = $true
+        Write-Log -Message "Hosts file backed up: $backupPath" -Level 'SUCCESS'
+    } catch {
+        Write-Log -Message "Hosts backup failed: $($_.Exception.Message)" -Level 'WARN'
+    }
+    if (-not $backupOk -and -not $Force) {
+        Write-Log -Message 'Skipping hosts cleanup because backup failed. Use -Force to override.' -Level 'WARN'
+        return
+    }
+
+    $localHostsPath = $hostsPath
+    $keptLines = @($kept)
+    $data = [pscustomobject]@{ HostsPath = $hostsPath; Backup = $backupPath; RemovedCount = $removed.Count }
+    Invoke-SafeAction -Description ("Remove {0} Microsoft-activation-blocking entry(ies) from hosts file" -f $removed.Count) -Category 'HostsCleanup' -Target $hostsPath -Data $data -Action {
+        Set-Content -LiteralPath $localHostsPath -Value $keptLines -Encoding ASCII -ErrorAction Stop
+    } | Out-Null
+
+    foreach ($r in $removed) {
+        Add-ReportListItem -ListName 'HostsEntriesRemoved' -Item ([pscustomobject]@{ Entry = ([string]$r).Trim(); Backup = $backupPath })
     }
 }
 
@@ -3643,11 +3969,11 @@ function Rename-PathToBackupSafe {
         return $null
     }
 
-    $newLeaf = '{0}.DeActiveByMyPC.{1}.bak' -f $leaf, $script:RunId
+    $newLeaf = '{0}.EasyActiveByMyPC.{1}.bak' -f $leaf, $script:RunId
     $destination = Join-Path $parent $newLeaf
     $i = 1
     while (Test-Path -LiteralPath $destination) {
-        $newLeaf = '{0}.DeActiveByMyPC.{1}.{2}.bak' -f $leaf, $script:RunId, $i
+        $newLeaf = '{0}.EasyActiveByMyPC.{1}.{2}.bak' -f $leaf, $script:RunId, $i
         $destination = Join-Path $parent $newLeaf
         $i++
     }
@@ -3881,7 +4207,7 @@ function Install-PostRebootSweepTask {
     }
 
     $taskName = 'PostRebootSweep'
-    $taskPath = '\DeActiveByMyPC\'
+    $taskPath = '\EasyActiveByMyPC\'
     $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -PostRebootSweep -SkipOffice -SkipOhookCleanup -NoRestartServices -VerboseLog -ExportReport' -f $scriptPath
 
@@ -3917,7 +4243,7 @@ function Remove-PostRebootSweepTask {
     param()
 
     $taskName = 'PostRebootSweep'
-    $taskPath = '\DeActiveByMyPC\'
+    $taskPath = '\EasyActiveByMyPC\'
     try {
         $task = Get-ScheduledTask -TaskName $taskName -TaskPath $taskPath -ErrorAction Stop
     } catch {
@@ -4002,6 +4328,26 @@ function New-PlainTextReport {
         }
     }
 
+    if ($script:Report.CrackAssessment.Requested) {
+        $ca = $script:Report.CrackAssessment
+        $null = $lines.Add('')
+        $null = $lines.Add((Get-UiText -Key 'ReportAssessmentHeading'))
+        foreach ($sig in @($ca.Signals)) {
+            $prefix = switch ([string]$sig.Severity) { 'Pass' { '[+]' } 'Info' { '[i]' } 'Warn' { '[?]' } 'Fail' { '[!]' } default { '[ ]' } }
+            $null = $lines.Add(('  {0} {1}: {2}' -f $prefix, $sig.Category, $sig.Evidence))
+        }
+        $null = $lines.Add('')
+        $null = $lines.Add(('  {0}: {1}' -f (Get-UiText -Key 'AsmVerdictHeading'), $ca.VerdictText))
+        $null = $lines.Add(('  {0}: {1} | {2}: {3}' -f (Get-UiText -Key 'AsmScoreLabel'), $ca.Score, (Get-UiText -Key 'AsmConfidenceLabel'), [string]$ca.ConfidenceText))
+        if (@($ca.Reasons).Count -gt 0) {
+            $null = $lines.Add(('  {0}:' -f (Get-UiText -Key 'AsmReasonsLabel')))
+            foreach ($reason in @($ca.Reasons)) { $null = $lines.Add(('    - {0}' -f $reason)) }
+        }
+        if ($ca.Incomplete) {
+            $null = $lines.Add(('  {0}' -f (Get-UiText -Key 'AsmVerdictIncomplete')))
+        }
+    }
+
     $null = $lines.Add('')
     foreach ($line in (Get-DigitalLicenseNoteLines)) {
         $null = $lines.Add($line)
@@ -4016,6 +4362,492 @@ function New-PlainTextReport {
         $null = $lines.Add(('  - {0}' -f $step))
     }
     return ($lines -join [Environment]::NewLine)
+}
+
+function New-AssessmentSignal {
+    [CmdletBinding()]
+    param(
+        [string]$Id,
+        [string]$Category,
+        [ValidateSet('Pass', 'Info', 'Warn', 'Fail')]
+        [string]$Severity,
+        [ValidateSet('High', 'Medium', 'Low', 'None')]
+        [string]$Confidence = 'None',
+        [int]$Weight = 0,
+        [string]$Evidence = ''
+    )
+
+    $signal = [pscustomobject]@{
+        Id = $Id
+        Category = $Category
+        Severity = $Severity
+        Confidence = $Confidence
+        Weight = $Weight
+        Evidence = $Evidence
+    }
+    $null = $script:Report.CrackAssessment.Signals.Add($signal)
+
+    $prefix = switch ($Severity) { 'Pass' { '[+]' } 'Info' { '[i]' } 'Warn' { '[?]' } 'Fail' { '[!]' } default { '[ ]' } }
+    $color = switch ($Severity) { 'Pass' { 'Green' } 'Info' { 'Gray' } 'Warn' { 'Yellow' } 'Fail' { 'Red' } default { 'Gray' } }
+    Write-Host ("  {0} {1}: {2}" -f $prefix, $Category, $Evidence) -ForegroundColor $color
+    Write-Log -Message ("Assessment [{0}] {1} ({2}/{3}): {4}" -f $Id, $Category, $Severity, $Confidence, $Evidence) -Level 'INFO'
+    return $signal
+}
+
+function Get-WindowsInstallDate {
+    [CmdletBinding()]
+    param()
+
+    try {
+        $os = @(Get-CimOrWmiObjectSafe -ClassName Win32_OperatingSystem) | Select-Object -First 1
+        if ($os -and $os.InstallDate) {
+            $value = $os.InstallDate
+            if ($value -is [datetime]) { return $value }
+            try { return [System.Management.ManagementDateTimeConverter]::ToDateTime([string]$value) } catch { return $null }
+        }
+    } catch {
+        Write-Log -Message "Unable to read Windows install date: $($_.Exception.Message)" -Level 'WARN'
+    }
+    return $null
+}
+
+function Get-KmsHostClassification {
+    [CmdletBinding()]
+    param([string]$HostValue)
+
+    if ([string]::IsNullOrWhiteSpace($HostValue)) { return 'None' }
+    $h = $HostValue.Trim().Trim('[', ']')
+    if (($h.Split(':').Count -eq 2) -and ($h -match '^(.+):\d+$')) { $h = $Matches[1] }
+    $h = $h.Trim()
+    if ($h -match '(?i)^(localhost|::1)$') { return 'LocalEmulator' }
+    if ($h -match '^(127\.\d{1,3}\.\d{1,3}\.\d{1,3}|0\.0\.0\.0)$') { return 'LocalEmulator' }
+    if ($h -match '^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$') { return 'PrivateKms' }
+    if ($h -match '^192\.168\.\d{1,3}\.\d{1,3}$') { return 'PrivateKms' }
+    if ($h -match '^172\.(1[6-9]|2[0-9]|3[0-1])\.\d{1,3}\.\d{1,3}$') { return 'PrivateKms' }
+    return 'PublicKms'
+}
+
+function Get-KmsHostFinding {
+    [CmdletBinding()]
+    param()
+
+    $rootKeyPath = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SoftwareProtectionPlatform'
+    $result = [pscustomobject]@{ Name = $null; Port = $null; Classification = 'None' }
+    $paths = @($rootKeyPath)
+    try {
+        if (Test-Path -LiteralPath $rootKeyPath) {
+            $paths += @(Get-ChildItem -LiteralPath $rootKeyPath -ErrorAction Stop | ForEach-Object { Join-Path $rootKeyPath $_.PSChildName })
+        }
+    } catch { }
+
+    foreach ($p in ($paths | Select-Object -Unique)) {
+        try {
+            $name = (Get-ItemProperty -LiteralPath $p -Name 'KeyManagementServiceName' -ErrorAction SilentlyContinue).'KeyManagementServiceName'
+            if (-not [string]::IsNullOrWhiteSpace([string]$name)) {
+                $result.Name = [string]$name
+                $result.Port = (Get-ItemProperty -LiteralPath $p -Name 'KeyManagementServicePort' -ErrorAction SilentlyContinue).'KeyManagementServicePort'
+                break
+            }
+        } catch { }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace([string]$result.Name)) {
+        $result.Classification = Get-KmsHostClassification -HostValue $result.Name
+    }
+    return $result
+}
+
+function Get-Kms38Finding {
+    [CmdletBinding()]
+    param()
+
+    $result = [pscustomobject]@{ IsKms38 = $false; ExpiryText = $null; Year = $null; HasData = $false }
+    $xpr = Get-WindowsLicenseExpiry
+    if ([string]::IsNullOrWhiteSpace($xpr)) { return $result }
+    $result.HasData = $true
+    $result.ExpiryText = $xpr
+    foreach ($match in [regex]::Matches($xpr, '\b(20\d{2})\b')) {
+        $year = [int]$match.Groups[1].Value
+        if ($year -ge 2037) {
+            $result.IsKms38 = $true
+            $result.Year = $year
+            break
+        }
+    }
+    return $result
+}
+
+function Get-GenuineBlockingFindings {
+    [CmdletBinding()]
+    param()
+
+    $findings = New-Object System.Collections.ArrayList
+
+    $regChecks = @(
+        @{ Value = 'NoGenTicket'; Paths = @(
+            'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SoftwareProtectionPlatform',
+            'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\CurrentVersion\Software Protection Platform',
+            'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Software Protection Platform'
+        ) },
+        @{ Value = 'NoAcquireGT'; Paths = @(
+            'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SoftwareProtectionPlatform',
+            'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\CurrentVersion\Software Protection Platform'
+        ) }
+    )
+    foreach ($check in $regChecks) {
+        foreach ($p in $check.Paths) {
+            try {
+                $value = (Get-ItemProperty -LiteralPath $p -Name $check.Value -ErrorAction SilentlyContinue).$($check.Value)
+                if ($null -ne $value) {
+                    $null = $findings.Add([pscustomobject]@{ Type = 'Registry'; Name = $check.Value; Location = $p; Value = $value })
+                    break
+                }
+            } catch { }
+        }
+    }
+
+    foreach ($svc in @('sppsvc', 'ClipSVC', 'osppsvc')) {
+        $p = "HKLM:\SYSTEM\CurrentControlSet\Services\$svc"
+        try {
+            $start = (Get-ItemProperty -LiteralPath $p -Name 'Start' -ErrorAction SilentlyContinue).'Start'
+            if ($null -ne $start -and [int]$start -eq 4) {
+                $null = $findings.Add([pscustomobject]@{ Type = 'Service'; Name = $svc; Location = $p; Value = 'Start=4 (Disabled)' })
+            }
+        } catch { }
+    }
+    return @($findings)
+}
+
+function Get-HostsFileActivationBlocks {
+    [CmdletBinding()]
+    param()
+
+    $blocks = New-Object System.Collections.ArrayList
+    $hostsPath = Join-Path $env:SystemRoot 'System32\drivers\etc\hosts'
+    if (-not (Test-Path -LiteralPath $hostsPath)) { return @($blocks) }
+
+    $activationDomains = @(
+        'sls.microsoft.com', 'activation.sls', 'activation-v2.sls', 'sls.update.microsoft.com',
+        'licensing.mp.microsoft.com', 'licensing.md.mp.microsoft.com', 'validation.sls',
+        'displaycatalog.mp.microsoft.com', 'activation.microsoft.com'
+    )
+
+    $lines = $null
+    try { $lines = Get-Content -LiteralPath $hostsPath -ErrorAction Stop } catch { return @($blocks) }
+
+    foreach ($raw in @($lines)) {
+        $line = ([string]$raw).Trim()
+        if ([string]::IsNullOrWhiteSpace($line) -or $line.StartsWith('#')) { continue }
+        $parts = $line -split '\s+'
+        if ($parts.Count -lt 2) { continue }
+        $ip = $parts[0]
+        if (-not ($ip -match '^(0\.0\.0\.0|127\.\d{1,3}\.\d{1,3}\.\d{1,3}|::)')) { continue }
+        for ($i = 1; $i -lt $parts.Count; $i++) {
+            $hostName = $parts[$i]
+            if ($hostName.StartsWith('#')) { break }
+            foreach ($domain in $activationDomains) {
+                if ($hostName.IndexOf($domain, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                    $null = $blocks.Add(('{0} -> {1}' -f $hostName, $ip))
+                    break
+                }
+            }
+        }
+    }
+    return @($blocks)
+}
+
+function Get-MASServiceCandidates {
+    [CmdletBinding()]
+    param()
+
+    $candidates = New-Object System.Collections.ArrayList
+    try {
+        foreach ($service in @(Get-CimOrWmiObjectSafe -ClassName Win32_Service)) {
+            $name = [string]$service.Name
+            $display = [string]$service.DisplayName
+            $pathName = [string]$service.PathName
+            if ((Test-MASArtifactName -Name $name).IsMatch -or (Test-MASArtifactName -Name $display).IsMatch -or (Test-MASPersistenceText -Text $pathName).IsMatch) {
+                $null = $candidates.Add(('{0} ({1})' -f $name, $display))
+            }
+        }
+    } catch {
+        Write-Log -Message "Unable to scan services for activation artifacts: $($_.Exception.Message)" -Level 'WARN'
+    }
+    return @($candidates)
+}
+
+function Get-CrackAssessmentVerdict {
+    [CmdletBinding()]
+    param([bool]$Incomplete = $false)
+
+    $signals = @($script:Report.CrackAssessment.Signals)
+    $definite = @($signals | Where-Object { $_.Severity -eq 'Fail' -and $_.Confidence -eq 'High' }).Count -gt 0
+    $scoreObj = $signals | Where-Object { $_.Severity -eq 'Warn' -or $_.Severity -eq 'Fail' } | Measure-Object -Property Weight -Sum
+    $score = if ($scoreObj -and $null -ne $scoreObj.Sum) { [int]$scoreObj.Sum } else { 0 }
+
+    $verdict = 'Clean'
+    if ($definite) {
+        $verdict = 'Cracked'
+    } elseif ($score -ge 50) {
+        $verdict = 'LikelyCracked'
+    } elseif ($score -ge 10) {
+        $verdict = 'Suspicious'
+    }
+
+    # Overall confidence in the verdict
+    $confidence = 'Medium'
+    if ($definite) {
+        $confidence = 'High'
+    } elseif ($verdict -eq 'LikelyCracked') {
+        $confidence = 'Medium'
+    } elseif ($verdict -eq 'Suspicious') {
+        $confidence = 'Low'
+    } else {
+        # Clean: high only if we actually gathered the key data and genuine check passed
+        $genuineOk = @($signals | Where-Object { $_.Id -eq 'genuine_check' -and $_.Severity -eq 'Pass' }).Count -gt 0
+        $confidence = if ($Incomplete) { 'Low' } elseif ($genuineOk) { 'High' } else { 'Medium' }
+    }
+
+    # Top contributing signals (evidence behind the verdict)
+    $reasons = @($signals |
+        Where-Object { $_.Severity -eq 'Warn' -or $_.Severity -eq 'Fail' } |
+        Sort-Object -Property @{ Expression = { [int]$_.Weight } } -Descending |
+        Select-Object -First 5 |
+        ForEach-Object { ('{0} - {1}' -f $_.Category, $_.Evidence) })
+
+    return [pscustomobject]@{
+        Verdict = $verdict
+        Score = $score
+        Definite = $definite
+        Confidence = $confidence
+        Reasons = $reasons
+    }
+}
+
+function Invoke-CrackAssessment {
+    [CmdletBinding()]
+    param()
+
+    $ca = $script:Report.CrackAssessment
+    $ca.Requested = $true
+    $incomplete = $false
+
+    Write-Host ''
+    Write-Host (Get-UiText -Key 'AsmTitle') -ForegroundColor Cyan
+    Write-Log -Message (Get-UiText -Key 'AsmTitle') -Level 'INFO'
+    Write-Host ''
+
+    # 0. Install date (context only)
+    $installDate = Get-WindowsInstallDate
+    $installText = if ($installDate) { $installDate.ToString('yyyy-MM-dd HH:mm:ss') } else { Get-UiText -Key 'AsmNoData' }
+    $null = New-AssessmentSignal -Id 'install_date' -Category (Get-UiText -Key 'AsmInstallDate') -Severity 'Info' -Evidence $installText
+
+    # 1. Activation status (WMI)
+    $winState = @(Get-WindowsActivationState)
+    $script:Report.WindowsActivationBefore = $winState
+    $channels = ''
+    $licensed = $false
+    if ($winState.Count -eq 0) {
+        $incomplete = $true
+        $null = New-AssessmentSignal -Id 'activation' -Category (Get-UiText -Key 'AsmActivationStatus') -Severity 'Info' -Evidence (Get-UiText -Key 'AsmNoData')
+    } else {
+        $licensed = @($winState | Where-Object { [int]$_.LicenseStatus -eq 1 }).Count -gt 0
+        $channels = (@($winState | ForEach-Object { [string]$_.ProductKeyChannel }) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique) -join ', '
+        $sev = if ($licensed) { 'Pass' } else { 'Warn' }
+        $w = if ($licensed) { 0 } else { 5 }
+        $statusWord = if ($licensed) { 'Licensed' } else { 'Not licensed' }
+        $null = New-AssessmentSignal -Id 'activation' -Category (Get-UiText -Key 'AsmActivationStatus') -Severity $sev -Weight $w -Evidence ('{0} | {1}' -f $statusWord, $channels)
+
+        # KMS client channel (GVLK)
+        if ($channels -match '(?i)GVLK') {
+            $null = New-AssessmentSignal -Id 'kms_channel' -Category (Get-UiText -Key 'AsmKmsClientChannel') -Severity 'Warn' -Confidence 'Medium' -Weight 40 -Evidence 'Volume:GVLK (KMS client key)'
+        } else {
+            $null = New-AssessmentSignal -Id 'kms_channel' -Category (Get-UiText -Key 'AsmKmsClientChannel') -Severity 'Pass' -Evidence (Get-UiText -Key 'AsmNotDetected')
+        }
+    }
+
+    # 1b. Genuine authenticity (SLIsGenuineLocal) — catches forged/HWID licenses that pass local licensing
+    $genuine = Get-WindowsGenuineStatus
+    $script:Report.GenuineStatus = $genuine
+    if (-not $genuine.Available) {
+        $null = New-AssessmentSignal -Id 'genuine_check' -Category (Get-UiText -Key 'AsmGenuine') -Severity 'Info' -Evidence (Get-UiText -Key 'AsmGenuineUnavailable')
+    } elseif ([int]$genuine.State -eq 0) {
+        $null = New-AssessmentSignal -Id 'genuine_check' -Category (Get-UiText -Key 'AsmGenuine') -Severity 'Pass' -Evidence (Get-UiText -Key 'AsmGenuineGenuine')
+    } elseif ([int]$genuine.State -eq 2) {
+        $null = New-AssessmentSignal -Id 'genuine_check' -Category (Get-UiText -Key 'AsmGenuine') -Severity 'Fail' -Confidence 'High' -Weight 100 -Evidence (Get-UiText -Key 'AsmGenuineTampered')
+    } elseif ([int]$genuine.State -eq 1) {
+        if ($licensed) {
+            $null = New-AssessmentSignal -Id 'genuine_check' -Category (Get-UiText -Key 'AsmGenuine') -Severity 'Fail' -Confidence 'High' -Weight 100 -Evidence (Get-UiText -Key 'AsmGenuineForged')
+        } else {
+            $null = New-AssessmentSignal -Id 'genuine_check' -Category (Get-UiText -Key 'AsmGenuine') -Severity 'Info' -Evidence (Get-UiText -Key 'AsmGenuineNotActivated')
+        }
+    } else {
+        $null = New-AssessmentSignal -Id 'genuine_check' -Category (Get-UiText -Key 'AsmGenuine') -Severity 'Info' -Evidence (Get-UiText -Key 'AsmGenuineOffline')
+    }
+
+    # 2. KMS host configuration
+    $kmsHost = Get-KmsHostFinding
+    switch ($kmsHost.Classification) {
+        'LocalEmulator' {
+            $null = New-AssessmentSignal -Id 'kms_host' -Category (Get-UiText -Key 'AsmKmsHost') -Severity 'Fail' -Confidence 'High' -Weight 100 -Evidence ('KeyManagementServiceName = {0} ({1})' -f $kmsHost.Name, (Get-UiText -Key 'AsmKmsLocalEmulator'))
+        }
+        'PrivateKms' {
+            $null = New-AssessmentSignal -Id 'kms_host' -Category (Get-UiText -Key 'AsmKmsHost') -Severity 'Warn' -Confidence 'Medium' -Weight 40 -Evidence ('KeyManagementServiceName = {0} ({1})' -f $kmsHost.Name, (Get-UiText -Key 'AsmKmsPrivate'))
+        }
+        'PublicKms' {
+            $null = New-AssessmentSignal -Id 'kms_host' -Category (Get-UiText -Key 'AsmKmsHost') -Severity 'Warn' -Confidence 'Low' -Weight 25 -Evidence ('KeyManagementServiceName = {0}' -f $kmsHost.Name)
+        }
+        default {
+            $null = New-AssessmentSignal -Id 'kms_host' -Category (Get-UiText -Key 'AsmKmsHost') -Severity 'Pass' -Evidence (Get-UiText -Key 'AsmNotDetected')
+        }
+    }
+
+    # 3. KMS38 (far-future expiry)
+    $kms38 = Get-Kms38Finding
+    if (-not $kms38.HasData) {
+        $null = New-AssessmentSignal -Id 'kms38' -Category (Get-UiText -Key 'AsmKms38') -Severity 'Info' -Evidence (Get-UiText -Key 'AsmNoData')
+    } elseif ($kms38.IsKms38) {
+        $null = New-AssessmentSignal -Id 'kms38' -Category (Get-UiText -Key 'AsmKms38') -Severity 'Fail' -Confidence 'High' -Weight 100 -Evidence ('{0} ~{1} (slmgr /xpr)' -f (Get-UiText -Key 'AsmKms38Signature'), $kms38.Year)
+    } else {
+        $null = New-AssessmentSignal -Id 'kms38' -Category (Get-UiText -Key 'AsmKms38') -Severity 'Pass' -Evidence (Get-UiText -Key 'AsmNotDetected')
+    }
+
+    # 4. License channel vs OEM/BIOS
+    $oemInfo = Get-OEMEmbeddedProductKey
+    if ($oemInfo.KeyFound -and [string]$oemInfo.Compatibility -eq 'Compatible') {
+        $null = New-AssessmentSignal -Id 'license_bios' -Category (Get-UiText -Key 'AsmLicenseBios') -Severity 'Pass' -Evidence ('{0}: {1}' -f (Get-UiText -Key 'AsmOemMatches'), $oemInfo.DetectedKeyEdition)
+    } elseif ($oemInfo.KeyFound) {
+        $null = New-AssessmentSignal -Id 'license_bios' -Category (Get-UiText -Key 'AsmLicenseBios') -Severity 'Warn' -Confidence 'Low' -Weight 10 -Evidence ('{0} (OEM={1}, Windows={2})' -f (Get-UiText -Key 'AsmOemMismatch'), $oemInfo.DetectedKeyEdition, $oemInfo.CurrentWindowsEdition)
+    } else {
+        $null = New-AssessmentSignal -Id 'license_bios' -Category (Get-UiText -Key 'AsmLicenseBios') -Severity 'Info' -Evidence (Get-UiText -Key 'AsmNoOemKey')
+    }
+
+    # 5. HWID / digital license — only meaningful when corroborated by a failed genuine check
+    $winStateHasData = ($winState.Count -gt 0)
+    $digitalNoOem = ($winStateHasData -and ($channels -match '(?i)Retail') -and -not $oemInfo.KeyFound)
+    $genuineNotClean = ($genuine.Available -and [int]$genuine.State -ne 0 -and [int]$genuine.State -ne 3)
+    if ($digitalNoOem -and $genuineNotClean) {
+        $null = New-AssessmentSignal -Id 'hwid' -Category (Get-UiText -Key 'AsmHwid') -Severity 'Warn' -Confidence 'Medium' -Weight 40 -Evidence (Get-UiText -Key 'AsmHwidForged')
+    } elseif ($digitalNoOem) {
+        $null = New-AssessmentSignal -Id 'hwid' -Category (Get-UiText -Key 'AsmHwid') -Severity 'Info' -Confidence 'Low' -Weight 0 -Evidence (Get-UiText -Key 'AsmHwidInconclusive')
+    } else {
+        $null = New-AssessmentSignal -Id 'hwid' -Category (Get-UiText -Key 'AsmHwid') -Severity 'Info' -Evidence (Get-UiText -Key 'AsmHwidNoSignal')
+    }
+
+    # 6. Illegal tool folders/files
+    $fileCandidates = @(Get-MASFileCandidates)
+    if ($fileCandidates.Count -gt 0) {
+        $highFiles = @($fileCandidates | Where-Object { [string]$_.Confidence -eq 'High' })
+        $names = (@($fileCandidates | ForEach-Object { Split-Path -Leaf ([string]$_.Path) }) | Select-Object -First 6) -join ', '
+        if ($highFiles.Count -gt 0) {
+            $null = New-AssessmentSignal -Id 'tool_folders' -Category (Get-UiText -Key 'AsmToolFolders') -Severity 'Fail' -Confidence 'High' -Weight 100 -Evidence $names
+        } else {
+            $null = New-AssessmentSignal -Id 'tool_folders' -Category (Get-UiText -Key 'AsmToolFolders') -Severity 'Warn' -Confidence 'Medium' -Weight 40 -Evidence $names
+        }
+    } else {
+        $null = New-AssessmentSignal -Id 'tool_folders' -Category (Get-UiText -Key 'AsmToolFolders') -Severity 'Pass' -Evidence (Get-UiText -Key 'AsmNotDetected')
+    }
+
+    # 7. Illegal scheduled tasks
+    $taskCandidates = @(Get-MASScheduledTaskCandidates)
+    if ($taskCandidates.Count -gt 0) {
+        $names = (@($taskCandidates | ForEach-Object { [string]$_.TaskName }) | Where-Object { $_ } | Select-Object -First 6) -join ', '
+        if ([string]::IsNullOrWhiteSpace($names)) { $names = ('{0} task(s)' -f $taskCandidates.Count) }
+        $null = New-AssessmentSignal -Id 'scheduled_tasks' -Category (Get-UiText -Key 'AsmScheduledTasks') -Severity 'Fail' -Confidence 'High' -Weight 100 -Evidence $names
+    } else {
+        $null = New-AssessmentSignal -Id 'scheduled_tasks' -Category (Get-UiText -Key 'AsmScheduledTasks') -Severity 'Pass' -Evidence (Get-UiText -Key 'AsmNotDetected')
+    }
+
+    # 8. Illegal services
+    $svcCandidates = @(Get-MASServiceCandidates)
+    if ($svcCandidates.Count -gt 0) {
+        $null = New-AssessmentSignal -Id 'services' -Category (Get-UiText -Key 'AsmServices') -Severity 'Fail' -Confidence 'High' -Weight 100 -Evidence ((@($svcCandidates) | Select-Object -First 6) -join ', ')
+    } else {
+        $null = New-AssessmentSignal -Id 'services' -Category (Get-UiText -Key 'AsmServices') -Severity 'Pass' -Evidence (Get-UiText -Key 'AsmNotDetected')
+    }
+
+    # 9. Office Ohook
+    $ohookCandidates = @(Get-OhookCandidates)
+    if ($ohookCandidates.Count -gt 0) {
+        $names = (@($ohookCandidates | ForEach-Object { Split-Path -Leaf ([string]$_.Path) }) | Where-Object { $_ } | Select-Object -First 4) -join ', '
+        if ([string]::IsNullOrWhiteSpace($names)) { $names = ('{0} item(s)' -f $ohookCandidates.Count) }
+        $null = New-AssessmentSignal -Id 'ohook' -Category (Get-UiText -Key 'AsmOhook') -Severity 'Fail' -Confidence 'High' -Weight 100 -Evidence $names
+    } else {
+        $null = New-AssessmentSignal -Id 'ohook' -Category (Get-UiText -Key 'AsmOhook') -Severity 'Pass' -Evidence (Get-UiText -Key 'AsmNotDetected')
+    }
+
+    # 10. Genuine-blocking registry + disabled services
+    $blockingFindings = @(Get-GenuineBlockingFindings)
+    $regFindings = @($blockingFindings | Where-Object { $_.Type -eq 'Registry' })
+    $svcDisabled = @($blockingFindings | Where-Object { $_.Type -eq 'Service' })
+    if ($regFindings.Count -gt 0) {
+        $desc = (@($regFindings | ForEach-Object { '{0} @ {1}' -f $_.Name, $_.Location }) | Select-Object -First 4) -join ' ; '
+        $null = New-AssessmentSignal -Id 'registry_tamper' -Category (Get-UiText -Key 'AsmRegistryTamper') -Severity 'Warn' -Confidence 'Low' -Weight (15 * $regFindings.Count) -Evidence $desc
+    } else {
+        $null = New-AssessmentSignal -Id 'registry_tamper' -Category (Get-UiText -Key 'AsmRegistryTamper') -Severity 'Pass' -Evidence (Get-UiText -Key 'AsmNotDetected')
+    }
+    if ($svcDisabled.Count -gt 0) {
+        $null = New-AssessmentSignal -Id 'services_disabled' -Category (Get-UiText -Key 'AsmServicesDisabled') -Severity 'Warn' -Confidence 'Medium' -Weight (35 * $svcDisabled.Count) -Evidence ((@($svcDisabled | ForEach-Object { $_.Name })) -join ', ')
+    } else {
+        $null = New-AssessmentSignal -Id 'services_disabled' -Category (Get-UiText -Key 'AsmServicesDisabled') -Severity 'Pass' -Evidence (Get-UiText -Key 'AsmNotDetected')
+    }
+
+    # 11. Hosts file blocking Microsoft activation
+    $hostsBlocks = @(Get-HostsFileActivationBlocks)
+    if ($hostsBlocks.Count -gt 0) {
+        $null = New-AssessmentSignal -Id 'hosts_file' -Category (Get-UiText -Key 'AsmHostsFile') -Severity 'Warn' -Confidence 'Medium' -Weight 30 -Evidence ((@($hostsBlocks) | Select-Object -First 4) -join ' ; ')
+    } else {
+        $null = New-AssessmentSignal -Id 'hosts_file' -Category (Get-UiText -Key 'AsmHostsFile') -Severity 'Pass' -Evidence (Get-UiText -Key 'AsmNotDetected')
+    }
+
+    # Verdict
+    $verdict = Get-CrackAssessmentVerdict -Incomplete $incomplete
+    $ca.Verdict = $verdict.Verdict
+    $ca.Score = $verdict.Score
+    $ca.DefiniteArtifact = $verdict.Definite
+    $ca.Confidence = $verdict.Confidence
+    $ca.Incomplete = $incomplete
+    $ca.Reasons.Clear()
+    foreach ($reason in @($verdict.Reasons)) { $null = $ca.Reasons.Add($reason) }
+
+    $verdictKey = switch ($verdict.Verdict) {
+        'Clean' { 'AsmVerdictClean' }
+        'Suspicious' { 'AsmVerdictSuspicious' }
+        'LikelyCracked' { 'AsmVerdictLikely' }
+        'Cracked' { 'AsmVerdictCracked' }
+        default { 'AsmVerdictClean' }
+    }
+    $ca.VerdictText = Get-UiText -Key $verdictKey
+    $confidenceKey = switch ($verdict.Confidence) {
+        'High' { 'AsmConfidenceHigh' }
+        'Medium' { 'AsmConfidenceMedium' }
+        'Low' { 'AsmConfidenceLow' }
+        default { 'AsmConfidenceMedium' }
+    }
+    $ca.ConfidenceText = Get-UiText -Key $confidenceKey
+    $verdictColor = switch ($verdict.Verdict) { 'Clean' { 'Green' } 'Suspicious' { 'Yellow' } default { 'Red' } }
+
+    Write-Host ''
+    Write-Host (Get-UiText -Key 'AsmVerdictHeading') -ForegroundColor Cyan
+    Write-Host ('  {0}' -f $ca.VerdictText) -ForegroundColor $verdictColor
+    Write-Host ('  {0}: {1} | {2}: {3}' -f (Get-UiText -Key 'AsmScoreLabel'), $verdict.Score, (Get-UiText -Key 'AsmConfidenceLabel'), $ca.ConfidenceText) -ForegroundColor Gray
+    if (@($ca.Reasons).Count -gt 0) {
+        Write-Host ('  {0}:' -f (Get-UiText -Key 'AsmReasonsLabel')) -ForegroundColor Gray
+        foreach ($reason in @($ca.Reasons)) { Write-Host ('    - {0}' -f $reason) -ForegroundColor Gray }
+    }
+    if ($incomplete) {
+        Write-Host ('  {0}' -f (Get-UiText -Key 'AsmVerdictIncomplete')) -ForegroundColor Yellow
+    }
+    Write-Log -Message ("Crack assessment verdict: {0} (score={1}, confidence={2}, definite={3}, incomplete={4})" -f $verdict.Verdict, $verdict.Score, $verdict.Confidence, $verdict.Definite, $incomplete) -Level 'INFO'
+
+    Add-ReportAction -Category 'CrackAssessment' -Action 'Assess crack/license tampering traces' -Target 'read-only diagnostic' -Status 'Done' -Detail ('Verdict={0}; Score={1}; Confidence={2}; Definite={3}' -f $verdict.Verdict, $verdict.Score, $verdict.Confidence, $verdict.Definite) -Data ([pscustomobject]@{
+        Verdict = $verdict.Verdict
+        Score = $verdict.Score
+        Confidence = $verdict.Confidence
+        Definite = $verdict.Definite
+        Incomplete = $incomplete
+        SignalCount = @($ca.Signals).Count
+    })
 }
 
 function New-HtmlReport {
@@ -4057,7 +4889,7 @@ function New-HtmlReport {
     $null = $sb.Append('.tbl th{width:auto;color:#1b1f23;background:#f6f8fa;}')
     $null = $sb.Append('.ok{color:#137333;font-weight:600;}.warn{color:#b06000;font-weight:600;}')
     $null = $sb.Append('.pill{display:inline-block;padding:2px 9px;border-radius:12px;font-size:12px;}')
-    $null = $sb.Append('.pill.ok{background:#e6f4ea;}.pill.warn{background:#fef7e0;}')
+    $null = $sb.Append('.pill.ok{background:#e6f4ea;}.pill.warn{background:#fef7e0;}.pill.bad{background:#fce8e6;color:#b3261e;}')
     $null = $sb.Append('.muted{color:#6a737d;font-size:12px;}ul{margin:6px 0 0 18px;}')
     $null = $sb.Append('</style></head><body><div class="wrap">')
 
@@ -4149,6 +4981,42 @@ function New-HtmlReport {
         $null = $sb.Append('</div>')
     }
 
+    # Crack / license assessment
+    if ($script:Report.CrackAssessment.Requested) {
+        $ca = $script:Report.CrackAssessment
+        $bannerColor = switch ([string]$ca.Verdict) { 'Clean' { '#137333' } 'Suspicious' { '#b06000' } default { '#b3261e' } }
+        $null = $sb.Append('<div class="card"><h2>')
+        $null = $sb.Append((& $esc (Get-UiText -Key 'ReportAssessmentHeading')))
+        $null = $sb.Append('</h2>')
+        $null = $sb.Append(('<p style="font-size:15px;font-weight:700;color:{0};">{1}</p>' -f $bannerColor, (& $esc $ca.VerdictText)))
+        $null = $sb.Append(('<p class="muted">{0}: {1} &nbsp;|&nbsp; {2}: {3}</p>' -f (& $esc (Get-UiText -Key 'AsmScoreLabel')), $ca.Score, (& $esc (Get-UiText -Key 'AsmConfidenceLabel')), (& $esc [string]$ca.ConfidenceText)))
+        if (@($ca.Reasons).Count -gt 0) {
+            $null = $sb.Append(('<p style="margin-bottom:4px;"><strong>{0}:</strong></p><ul>' -f (& $esc (Get-UiText -Key 'AsmReasonsLabel'))))
+            foreach ($reason in @($ca.Reasons)) {
+                $null = $sb.Append(('<li>{0}</li>' -f (& $esc [string]$reason)))
+            }
+            $null = $sb.Append('</ul>')
+        }
+        if ($ca.Incomplete) {
+            $null = $sb.Append(('<p class="muted">{0}</p>' -f (& $esc (Get-UiText -Key 'AsmVerdictIncomplete'))))
+        }
+        $null = $sb.Append('<table class="tbl"><tr><th>')
+        $null = $sb.Append((& $esc (Get-UiText -Key 'AsmColCheck')))
+        $null = $sb.Append('</th><th>')
+        $null = $sb.Append((& $esc (Get-UiText -Key 'LicenseStatusLabel')))
+        $null = $sb.Append('</th><th>')
+        $null = $sb.Append((& $esc (Get-UiText -Key 'AsmColConfidence')))
+        $null = $sb.Append('</th><th>')
+        $null = $sb.Append((& $esc (Get-UiText -Key 'AsmColEvidence')))
+        $null = $sb.Append('</th></tr>')
+        foreach ($sig in @($ca.Signals)) {
+            $cls = switch ([string]$sig.Severity) { 'Pass' { 'ok' } 'Fail' { 'bad' } 'Warn' { 'warn' } default { '' } }
+            $conf = if ([string]$sig.Confidence -eq 'None') { '-' } else { [string]$sig.Confidence }
+            $null = $sb.Append(('<tr><td>{0}</td><td><span class="pill {1}">{2}</span></td><td>{3}</td><td>{4}</td></tr>' -f (& $esc $sig.Category), $cls, (& $esc $sig.Severity), (& $esc $conf), (& $esc $sig.Evidence)))
+        }
+        $null = $sb.Append('</table></div>')
+    }
+
     # Summary + next steps
     $null = $sb.Append('<div class="card"><h2>')
     $null = $sb.Append((& $esc (Get-UiText -Key 'ReportNextSteps')))
@@ -4177,11 +5045,11 @@ function Invoke-ReportRetention {
     }
 
     $specs = @(
-        @{ Dir = $script:ReportRoot; Pattern = 'DeActiveByMyPC-*.json' },
-        @{ Dir = $script:ReportRoot; Pattern = 'DeActiveByMyPC-*.txt' },
-        @{ Dir = $script:ReportRoot; Pattern = 'DeActiveByMyPC-*.html' },
-        @{ Dir = $script:ReportRoot; Pattern = 'DeActiveByMyPC-Actions-*.csv' },
-        @{ Dir = $script:LogRoot; Pattern = 'DeActiveByMyPC-*.log' }
+        @{ Dir = $script:ReportRoot; Pattern = 'EasyActiveByMyPC-*.json' },
+        @{ Dir = $script:ReportRoot; Pattern = 'EasyActiveByMyPC-*.txt' },
+        @{ Dir = $script:ReportRoot; Pattern = 'EasyActiveByMyPC-*.html' },
+        @{ Dir = $script:ReportRoot; Pattern = 'EasyActiveByMyPC-Actions-*.csv' },
+        @{ Dir = $script:LogRoot; Pattern = 'EasyActiveByMyPC-*.log' }
     )
 
     foreach ($spec in $specs) {
@@ -4256,7 +5124,7 @@ function Generate-ActivationReport {
     Ensure-NextSteps
     $script:Report.EndTime = (Get-Date).ToString('o')
 
-    $jsonPath = Join-Path $script:ReportRoot ("DeActiveByMyPC-{0}.json" -f $script:RunId)
+    $jsonPath = Join-Path $script:ReportRoot ("EasyActiveByMyPC-{0}.json" -f $script:RunId)
     try {
         $script:Report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $jsonPath -Encoding UTF8 -Force
         $null = $script:Report.ReportFiles.Add($jsonPath)
@@ -4266,9 +5134,9 @@ function Generate-ActivationReport {
     }
 
     if ($ExportReport) {
-        $txtPath = Join-Path $script:ReportRoot ("DeActiveByMyPC-{0}.txt" -f $script:RunId)
-        $csvPath = Join-Path $script:ReportRoot ("DeActiveByMyPC-Actions-{0}.csv" -f $script:RunId)
-        $htmlPath = Join-Path $script:ReportRoot ("DeActiveByMyPC-{0}.html" -f $script:RunId)
+        $txtPath = Join-Path $script:ReportRoot ("EasyActiveByMyPC-{0}.txt" -f $script:RunId)
+        $csvPath = Join-Path $script:ReportRoot ("EasyActiveByMyPC-Actions-{0}.csv" -f $script:RunId)
+        $htmlPath = Join-Path $script:ReportRoot ("EasyActiveByMyPC-{0}.html" -f $script:RunId)
 
         try {
             New-PlainTextReport | Set-Content -LiteralPath $txtPath -Encoding UTF8 -Force
@@ -4361,6 +5229,37 @@ function Add-DetectedArtifactReportItems {
     }
 }
 
+function Reset-RunContext {
+    [CmdletBinding()]
+    param()
+
+    # Fresh identity + report for the next task so each task keeps its own RunId / log / report / backups.
+    $script:RunId = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $script:BackupRoot = Join-Path (Join-Path $script:ProgramDataRoot 'Backups') $script:RunId
+    $script:LogPath = $null
+    $script:LastHtmlReportPath = $null
+    $script:HadWarnings = $false
+    $script:Report = New-ReportObject
+}
+
+function Confirm-ReturnToLauncherMenu {
+    [CmdletBinding()]
+    param()
+
+    Write-Host ''
+    if ($script:Language -eq 'en') {
+        Write-Host 'Task finished.' -ForegroundColor Cyan
+        Write-Host 'Tip: if you just cleaned Windows/Office licensing, restart the PC before the next action.' -ForegroundColor Gray
+        $answer = Read-Host 'Press Enter to return to the main menu, or type N/0 to exit'
+    } else {
+        Write-Host 'Đã xong tác vụ.' -ForegroundColor Cyan
+        Write-Host 'Lưu ý: nếu vừa dọn bản quyền Windows/Office, nên khởi động lại máy trước khi làm thao tác tiếp theo.' -ForegroundColor Gray
+        $answer = Read-Host 'Nhấn Enter để quay lại menu chính, hoặc gõ N/0 để thoát'
+    }
+    # Default (empty) returns to menu; only an explicit no/exit leaves.
+    return (-not ($answer -match '^(?i)\s*(n|no|0|q|exit|thoat|thoát)\s*$'))
+}
+
 function Invoke-Main {
     [CmdletBinding()]
     param()
@@ -4378,6 +5277,7 @@ function Invoke-Main {
     if ($LauncherMenu) {
         $shouldRun = Invoke-LauncherMenu
         if (-not $shouldRun) {
+            $script:LoopAgain = $false
             return
         }
     } else {
@@ -4418,10 +5318,8 @@ function Invoke-Main {
 
         Invoke-ReportOpenPrompt
         Write-Log -Message (Get-UiText -Key 'CompletedOEMRun') -Level 'SUCCESS'
-        return
     }
-
-    if ($CheckLicenseOnly) {
+    elseif ($CheckLicenseOnly) {
         Write-Step -Number 1 -Name (Get-UiText -Key 'StepPreflight')
         $script:Report.OS = Get-WindowsOSInfo
         Write-Log -Message (Get-UiText -Key 'LicenseCheckMode') -Level 'INFO'
@@ -4440,10 +5338,29 @@ function Invoke-Main {
 
         Invoke-ReportOpenPrompt
         Write-Log -Message (Get-UiText -Key 'CompletedLicenseCheck') -Level 'SUCCESS'
-        return
     }
+    elseif ($AssessCrack) {
+        Write-Step -Number 1 -Name (Get-UiText -Key 'StepPreflight')
+        $script:Report.OS = Get-WindowsOSInfo
+        Write-Log -Message (Get-UiText -Key 'AssessCrackMode') -Level 'INFO'
 
-    Write-Step -Number 1 -Name (Get-UiText -Key 'StepPreflight')
+        Write-Step -Number 2 -Name (Get-UiText -Key 'StepAssessCrack')
+        Invoke-CrackAssessment
+
+        $script:Report.NextSteps.Clear()
+        $null = $script:Report.NextSteps.Add((Get-UiText -Key 'AsmNextStep'))
+
+        Write-Step -Number 3 -Name (Get-UiText -Key 'StepGenerateReport')
+        Generate-ActivationReport
+
+        Write-Step -Number 4 -Name (Get-UiText -Key 'StepShowNextSteps')
+        Show-NextSteps
+
+        Invoke-ReportOpenPrompt
+        Write-Log -Message (Get-UiText -Key 'CompletedAssessment') -Level 'SUCCESS'
+    }
+    else {
+        Write-Step -Number 1 -Name (Get-UiText -Key 'StepPreflight')
     Show-OfficeCloseWarning
     $script:Report.OS = Get-WindowsOSInfo
     $script:Report.WindowsActivationBefore = @(Get-WindowsActivationState)
@@ -4469,6 +5386,9 @@ function Invoke-Main {
     } else {
         Clear-WindowsKMSConfiguration
         Clear-WindowsProductKey -ActivationStateBefore $script:Report.WindowsActivationBefore
+        Remove-GenuineBlockingRegistry
+        Restore-DisabledLicensingServices
+        Remove-HostsActivationBlocks
 
         if ($ReinstallOEMKey) {
             $oemInfo = Get-OEMEmbeddedProductKey
@@ -4526,14 +5446,28 @@ function Invoke-Main {
 
     Invoke-ReportOpenPrompt
     Write-Log -Message (Get-UiText -Key 'CompletedRun') -Level 'SUCCESS'
+    }
+
+    if (-not $LauncherMenu) {
+        $script:LoopAgain = $false
+        return
+    }
+    $script:LoopAgain = Confirm-ReturnToLauncherMenu
 }
 
 try {
-    Invoke-Main
-    if ($script:HadWarnings) {
-        exit 3
-    }
-    exit 0
+    $script:SessionExitCode = 0
+    do {
+        $script:LoopAgain = $false
+        Invoke-Main
+        if ($script:HadWarnings) {
+            $script:SessionExitCode = 3
+        }
+        if ($script:LoopAgain) {
+            Reset-RunContext
+        }
+    } while ($script:LoopAgain)
+    exit $script:SessionExitCode
 } catch {
     $script:FatalError = $true
     if (-not $script:LogPath) {

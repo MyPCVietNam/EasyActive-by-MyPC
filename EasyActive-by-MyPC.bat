@@ -1,7 +1,7 @@
 @echo off
 setlocal EnableExtensions
 
-set "CMD_LAUNCHER=%~dp0DeActive-Menu.cmd"
+set "CMD_LAUNCHER=%~dp0EasyActive-Menu.cmd"
 
 if not exist "%CMD_LAUNCHER%" (
     echo ERROR: Cannot find launcher:

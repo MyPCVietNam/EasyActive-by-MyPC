@@ -1,14 +1,14 @@
 @echo off
 setlocal EnableExtensions
 
-set "TOOL_NAME=DeActive by MyPC"
-set "TOOL_VERSION=1.7.1"
-set "LAC_ROOT=%ProgramData%\DeActiveByMyPC"
+set "TOOL_NAME=EasyActive by MyPC"
+set "TOOL_VERSION=1.8.4"
+set "LAC_ROOT=%ProgramData%\EasyActiveByMyPC"
 
 title %TOOL_NAME%
 
 set "SCRIPT_DIR=%~dp0"
-set "PS1=%SCRIPT_DIR%DeActive-Engine.ps1"
+set "PS1=%SCRIPT_DIR%EasyActive-Engine.ps1"
 set "POWERSHELL=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 if exist "%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" (
     set "POWERSHELL=%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
