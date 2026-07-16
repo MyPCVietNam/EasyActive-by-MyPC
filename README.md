@@ -1,6 +1,43 @@
 # DeActive by MyPC
 
-Phiên bản: `1.7.1`
+Phiên bản: `1.8.3`
+
+## Thay đổi trong v1.8.3 (quay lại menu + rõ nghĩa nút hủy)
+
+- **Quay lại menu chính sau khi xong tác vụ:** trước đây chạy xong một việc là tool thoát; nay sau mỗi tác vụ sẽ hỏi *"Nhấn Enter để quay lại menu chính, hoặc N/0 để thoát"*. Nhờ đó làm được cả chuỗi trong **một lần chạy**, ví dụ: Đánh giá (menu 7) → Dọn (menu 2) → Đánh giá lại (menu 7) để xác nhận sạch.
+- **Mỗi tác vụ một RunId/log/báo cáo riêng:** khi quay lại menu, tool tạo RunId mới và báo cáo mới, không trộn lẫn kết quả giữa các lần.
+- **Nhắc khởi động lại:** nếu vừa dọn bản quyền, tool nhắc nên restart máy trước khi làm thao tác tiếp theo.
+- **Rõ nghĩa lựa chọn ở bước xác nhận:** các prompt cảnh báo (dọn Windows / đóng Office) nay ghi rõ **"N = quay lại menu"** thay vì chỉ "N/Hủy", tránh hiểu nhầm là thoát.
+
+*Không thêm nút "Quay Lại" ở menu gốc* vì menu gốc đã là cấp trên cùng (đã có "0 = Thoát" và menu tự lặp lại).
+
+## Thay đổi trong v1.8.2 (dọn crack triệt để hơn)
+
+Bổ sung 3 bước dọn (chạy trong pha dọn Windows, tôn trọng `-SkipWindows`) để gỡ nốt các can thiệp *chặn Windows tự kiểm tra chính hãng* mà trước đây chỉ phát hiện chứ chưa xóa — nhờ đó sau khi cài key hợp lệ, máy sạch thật, không còn cặn crack:
+
+- **Xóa khóa registry chặn genuine:** gỡ `NoGenTicket` / `NoAcquireGT` (quét các vị trí khả dĩ, chỉ xóa nơi thật sự có). Trả lại khả năng tạo genuine ticket cho Windows.
+- **Bật lại dịch vụ bảo vệ bị tắt:** nếu `sppsvc` / `ClipSVC` / `osppsvc` bị đặt Disabled (Start=4) do crack, đưa về Manual (Start=3). Máy bình thường không bị đụng.
+- **Dọn file hosts chặn máy chủ kích hoạt:** gỡ đúng những dòng trỏ tên miền kích hoạt Microsoft về `0.0.0.0/127.x`, giữ nguyên phần còn lại.
+
+Tất cả đều theo cơ chế an toàn sẵn có: **`-DryRun` chỉ liệt kê không sửa**, **backup trước khi đổi** (export registry + copy file hosts vào thư mục Backups theo RunId), có log và ghi vào báo cáo. Backup fail thì bỏ qua bước đó (trừ khi `-Force`).
+
+*Lưu ý:* KMS38 không cần bước riêng — khi đã gỡ key + xóa cấu hình rồi cài key hợp lệ và kích hoạt lại thì hạn kích hoạt bị ghi đè, tự sạch qua luồng re-license.
+
+## Thay đổi trong v1.8.1 (hoàn thiện đánh giá crack - Phase 2)
+
+- **Thêm kiểm tra tính chính hãng vào kết luận:** Chế độ đánh giá (menu 7) giờ dùng `SLIsGenuineLocal` để bắt **license giả kiểu HWID/KMS** — trường hợp máy báo "đã kích hoạt" ở mức WMI nhưng kiểm tra genuine lại nói *Invalid/Tampered*. Đây là dấu hiệu mạnh và chính xác hơn nhiều so với chỉ đọc `LicenseStatus`. Máy chưa kích hoạt (invalid nhưng không phải crack) không bị quy chụp.
+- **HWID nhận diện thông minh hơn:** Trước đây HWID chỉ để tham khảo. Nay chỉ nâng thành tín hiệu tính điểm khi **có đủ bằng chứng đi kèm** (digital license + không có key OEM + genuine không sạch). Nếu genuine báo chính hãng thì digital license vẫn coi là hợp lệ — tránh báo nhầm máy dùng digital license thật.
+- **Kết luận kèm độ tin cậy + lý do:** Mỗi lần đánh giá giờ cho thêm **Độ tin cậy** (Cao/Trung bình/Thấp) và liệt kê **Lý do chính** (các tín hiệu nặng ký nhất dẫn tới kết luận), để anh hiểu vì sao ra kết quả đó thay vì chỉ một dòng phán.
+- **Báo cáo HTML/TXT bổ sung:** thêm cột "Độ tin cậy" trong bảng checklist, dòng độ tin cậy tổng thể, và mục "Lý do chính".
+
+## Thay đổi trong v1.8.0
+
+- **Thêm chế độ "Đánh giá dấu vết crack / bản quyền" (menu 7, chỉ đọc):** Soi toàn diện dấu vết bẻ khóa kích hoạt trên máy rồi cho một **KẾT LUẬN** kèm bằng chứng, tương tự công cụ kiểm tra bản quyền của cơ quan chức năng nhưng **thận trọng hơn để tránh kết tội oan**. Không dọn, không sửa gì; chỉ đọc và báo cáo.
+- **Các hạng mục được kiểm tra:** ngày cài Windows; trạng thái kích hoạt (WMI); key client KMS (GVLK); **cấu hình máy chủ KMS** (cờ đỏ khi trỏ về `127.0.0.1/127.0.0.2/0.0.0.0/localhost` = dấu hiệu KMS_VL_ALL/MAS); **KMS38** (hạn kích hoạt bị đẩy tới ~2038 qua `slmgr /xpr`); đối chiếu kênh license với **key OEM/BIOS**; HWID/digital license (chỉ tham khảo, không quy chụp); **thư mục/file tool lậu**; **tác vụ lịch lậu**; **dịch vụ lậu**; crack Office (**Ohook**); **can thiệp Registry** (`NoGenTicket`, `NoAcquireGT`); **dịch vụ bảo vệ bị tắt** (`sppsvc`/`ClipSVC`/`osppsvc` Start=4); và **file hosts chặn máy chủ kích hoạt Microsoft**.
+- **Kết luận có chấm điểm theo trọng số:** gom các tín hiệu thành 4 mức — *Không phát hiện crack / Nghi ngờ / Nhiều khả năng crack / Phát hiện crack*. Một tín hiệu yếu đơn lẻ (ví dụ chỉ có `NoGenTicket`) chỉ xếp mức "Nghi ngờ", không phán ngay là crack.
+- **Mở rộng thư viện nhận diện tool lậu:** thêm KMSpico, KMSTools, Ratiborus, HWIDGEN, Microsoft-Activation-Scripts/MAS_AIO, Re-Loader, Microsoft Toolkit, AAct, W10 Digital Activation, SppExtComObjHook… cho cả bước quét/dọn lẫn bước đánh giá.
+- **Kết quả đánh giá vào cả báo cáo HTML và TXT:** thêm bảng checklist theo hạng mục + banner kết luận (xanh/vàng/đỏ).
+- Tham số dòng lệnh mới: `-AssessCrack` (chạy chế độ đánh giá chỉ đọc).
 
 ## Thay đổi trong v1.7.1
 

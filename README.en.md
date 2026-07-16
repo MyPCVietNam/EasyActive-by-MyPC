@@ -1,6 +1,43 @@
 # DeActive by MyPC
 
-Version: `1.7.1`
+Version: `1.8.3`
+
+## Changes in v1.8.3 (return to menu + clearer cancel option)
+
+- **Return to the main menu after a task:** previously the tool exited after finishing one task; now after each task it asks *"Press Enter to return to the main menu, or N/0 to exit"*. This lets you run a full chain in one session, e.g. Assess (menu 7) → Clean (menu 2) → Assess again (menu 7) to confirm it is clean.
+- **Each task gets its own RunId/log/report:** returning to the menu starts a fresh RunId and report, so results from different tasks are never mixed.
+- **Restart reminder:** if you just cleaned licensing, the tool reminds you to restart before the next action.
+- **Clearer confirmation prompts:** the warning prompts (clean Windows / close Office) now say **"N = back to menu"** instead of just "N/Cancel", so it is not mistaken for exiting.
+
+*No "Back" item was added to the root menu* because the root is already the top level (it has "0 = Exit" and re-displays itself).
+
+## Changes in v1.8.2 (more thorough crack cleanup)
+
+Added 3 cleanup steps (run in the Windows cleanup phase, respecting `-SkipWindows`) that remove the remaining *genuine-validation-suppression* tampering that was previously only detected, not removed — so that after a legitimate key is installed the machine is genuinely clean with no crack residue:
+
+- **Remove genuine-blocking registry values:** deletes `NoGenTicket` / `NoAcquireGT` (checks all plausible locations, removes only where actually present). Restores Windows' ability to generate a genuine ticket.
+- **Re-enable disabled protection services:** if `sppsvc` / `ClipSVC` / `osppsvc` were set to Disabled (Start=4) by a crack, restores them to Manual (Start=3). Healthy machines are left untouched.
+- **Clean hosts-file activation blocks:** removes exactly the lines that sinkhole Microsoft activation domains to `0.0.0.0/127.x`, leaving the rest of the file intact.
+
+All follow the existing safety model: **`-DryRun` only lists, never changes**, **backup before modifying** (registry export + hosts file copy into the per-run Backups folder), with logging and report entries. If a backup fails the step is skipped (unless `-Force`).
+
+*Note:* KMS38 needs no dedicated step — once the key is removed, config cleared, a legitimate key installed and re-activated, the activation expiry is overwritten and self-cleans through the re-license flow.
+
+## Changes in v1.8.1 (assessment completion - Phase 2)
+
+- **Genuine authenticity now feeds the verdict:** The assessment mode (menu 7) now uses `SLIsGenuineLocal` to catch **forged HWID/KMS-style licenses** — the case where a machine reports "activated" at the WMI level but the genuine check says *Invalid/Tampered*. This is a much stronger and more accurate signal than reading `LicenseStatus` alone. A machine that is simply not activated (invalid but not a crack) is not accused.
+- **Smarter HWID detection:** HWID used to be informational only. It is now promoted to a scored signal **only when corroborated** (digital license + no OEM key + genuine check not clean). If the genuine check reports genuine, a digital license is treated as legitimate — avoiding false positives on real digital licenses.
+- **Verdict now includes confidence + reasons:** Each assessment now reports an overall **Confidence** (High/Medium/Low) and lists the **Main reasons** (the highest-weighted signals behind the verdict), so you can see *why* the conclusion was reached instead of a bare one-liner.
+- **HTML/TXT report additions:** added a "Confidence" column to the checklist table, an overall confidence line, and a "Main reasons" section.
+
+## Changes in v1.8.0
+
+- **New "Crack / license tampering assessment" mode (menu 7, read-only):** Runs a full sweep for activation-bypass traces and produces a **CONCLUSION** with evidence — similar to the license-checking tool shown by authorities, but **more conservative to avoid false accusations**. Nothing is cleaned or changed; the machine is only inspected and reported on.
+- **Checks performed:** Windows install date; activation status (WMI); KMS client key (GVLK); **KMS server config** (red flag when it points to `127.0.0.1/127.0.0.2/0.0.0.0/localhost` = KMS_VL_ALL/MAS signature); **KMS38** (activation expiry pushed to ~2038 via `slmgr /xpr`); license channel vs **OEM/BIOS** key; HWID/digital license (informational only, no accusation); **illegal tool folders/files**; **illegal scheduled tasks**; **illegal services**; Office crack (**Ohook**); **registry tampering** (`NoGenTicket`, `NoAcquireGT`); **disabled protection services** (`sppsvc`/`ClipSVC`/`osppsvc` Start=4); and **hosts file blocking Microsoft activation servers**.
+- **Weighted verdict:** signals are aggregated into 4 levels — *No crack detected / Suspicious / Likely cracked / Crack detected*. A single weak signal (e.g. only `NoGenTicket`) is rated "Suspicious" rather than immediately declared a crack.
+- **Broader crack-tool signature library:** added KMSpico, KMSTools, Ratiborus, HWIDGEN, Microsoft-Activation-Scripts/MAS_AIO, Re-Loader, Microsoft Toolkit, AAct, W10 Digital Activation, SppExtComObjHook, and more — used by both the scan/clean and the assessment paths.
+- **Assessment results in both HTML and TXT reports:** added a per-category checklist table plus a colored verdict banner (green/amber/red).
+- New command-line switch: `-AssessCrack` (runs the read-only assessment mode).
 
 ## Changes in v1.7.1
 
