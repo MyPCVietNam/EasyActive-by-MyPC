@@ -49,7 +49,7 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
 $script:ToolName = 'EasyActive by MyPC'
-$script:Version = '1.8.4'
+$script:Version = '1.8.5'
 $script:Language = $Language.ToLowerInvariant()
 $script:RunId = Get-Date -Format 'yyyyMMdd-HHmmss'
 $script:ProgramDataRoot = Join-Path $env:ProgramData 'EasyActiveByMyPC'
@@ -408,6 +408,8 @@ function Get-UiText {
             'AsmNotDetected' { return 'not detected' }
             'AsmKmsLocalEmulator' { return 'localhost/emulator - strong KMS-crack signal' }
             'AsmKmsPrivate' { return 'private IP - could be enterprise KMS' }
+            'AsmKmsPublic' { return 'public internet KMS host - almost always a crack' }
+            'AsmKmsKnownEmulator' { return 'known public KMS-emulator server - crack' }
             'AsmOemMatches' { return 'OEM/BIOS entitlement matches edition' }
             'AsmOemMismatch' { return 'embedded OEM key targets a different edition' }
             'AsmNoOemKey' { return 'no embedded OEM key in firmware' }
@@ -552,6 +554,8 @@ function Get-UiText {
         'AsmNotDetected' { return 'không phát hiện' }
         'AsmKmsLocalEmulator' { return 'localhost/emulator - dấu hiệu crack KMS mạnh' }
         'AsmKmsPrivate' { return 'IP nội bộ - có thể là KMS doanh nghiệp' }
+        'AsmKmsPublic' { return 'máy chủ KMS công khai trên internet - gần như luôn là crack' }
+        'AsmKmsKnownEmulator' { return 'máy chủ KMS lậu công khai đã biết - crack' }
         'AsmOemMatches' { return 'Entitlement OEM/BIOS khớp phiên bản' }
         'AsmOemMismatch' { return 'key OEM nhúng thuộc phiên bản khác' }
         'AsmNoOemKey' { return 'không có key OEM nhúng trong firmware' }
@@ -3125,6 +3129,9 @@ function Clear-WindowsKMSConfiguration {
     $valueNames = @(
         'KeyManagementServiceName',
         'KeyManagementServicePort',
+        'KeyManagementServiceLookupDomain',
+        'DiscoveredKeyManagementServiceMachineName',
+        'DiscoveredKeyManagementServiceMachinePort',
         'DisableDnsPublishing',
         'DisableKeyManagementServiceHostCaching'
     )
@@ -3167,6 +3174,9 @@ function Clear-OfficeKMSConfiguration {
     $valueNames = @(
         'KeyManagementServiceName',
         'KeyManagementServicePort',
+        'KeyManagementServiceLookupDomain',
+        'DiscoveredKeyManagementServiceMachineName',
+        'DiscoveredKeyManagementServiceMachinePort',
         'DisableDnsPublishing',
         'DisableKeyManagementServiceHostCaching'
     )
@@ -4411,11 +4421,35 @@ function Get-WindowsInstallDate {
     return $null
 }
 
+function Test-KnownKmsEmulatorDomain {
+    [CmdletBinding()]
+    param([string]$HostValue)
+
+    if ([string]::IsNullOrWhiteSpace($HostValue)) { return $false }
+    $h = $HostValue.Trim().Trim('[', ']')
+    if (($h.Split(':').Count -eq 2) -and ($h -match '^(.+):\d+$')) { $h = $Matches[1] }
+    $h = $h.Trim().ToLowerInvariant()
+
+    # Curated list of well-known public KMS-emulator servers (crack). Not exhaustive; a public
+    # internet KMS host is itself already suspicious, but a match here is treated as definite.
+    $known = @(
+        'kms.loli.beer', 'kms.digiboy.ir', 'kms8.msguides.com', 'kms.msguides.com',
+        'kms.03k.org', 'kms.chinancce.com', 'kms.shuax.com', 'kms.cangshui.net',
+        'kms.lotro.cc', 'kms.moeclub.org', 'kms.library.hk', 'kms.lolico.moe',
+        'win.kms.moe', 'kms.wxlost.com', 'kms.ddns.net', 'kms.v0v.bid', 'zh.us.to'
+    )
+    foreach ($d in $known) {
+        if ($h -eq $d -or $h.EndsWith('.' + $d)) { return $true }
+    }
+    return $false
+}
+
 function Get-KmsHostClassification {
     [CmdletBinding()]
     param([string]$HostValue)
 
     if ([string]::IsNullOrWhiteSpace($HostValue)) { return 'None' }
+    if (Test-KnownKmsEmulatorDomain -HostValue $HostValue) { return 'KnownEmulatorDomain' }
     $h = $HostValue.Trim().Trim('[', ']')
     if (($h.Split(':').Count -eq 2) -and ($h -match '^(.+):\d+$')) { $h = $Matches[1] }
     $h = $h.Trim()
@@ -4432,7 +4466,7 @@ function Get-KmsHostFinding {
     param()
 
     $rootKeyPath = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SoftwareProtectionPlatform'
-    $result = [pscustomobject]@{ Name = $null; Port = $null; Classification = 'None' }
+    $result = [pscustomobject]@{ Name = $null; Port = $null; Source = $null; Classification = 'None' }
     $paths = @($rootKeyPath)
     try {
         if (Test-Path -LiteralPath $rootKeyPath) {
@@ -4440,15 +4474,23 @@ function Get-KmsHostFinding {
         }
     } catch { }
 
+    # A KMS host can linger in the configured name, the DNS-discovered name, or a lookup domain.
+    # Tools like WinCheck read the discovered value too, so all of them must be checked.
+    $hostValueNames = @('KeyManagementServiceName', 'DiscoveredKeyManagementServiceMachineName', 'KeyManagementServiceLookupDomain')
+
     foreach ($p in ($paths | Select-Object -Unique)) {
-        try {
-            $name = (Get-ItemProperty -LiteralPath $p -Name 'KeyManagementServiceName' -ErrorAction SilentlyContinue).'KeyManagementServiceName'
-            if (-not [string]::IsNullOrWhiteSpace([string]$name)) {
-                $result.Name = [string]$name
-                $result.Port = (Get-ItemProperty -LiteralPath $p -Name 'KeyManagementServicePort' -ErrorAction SilentlyContinue).'KeyManagementServicePort'
-                break
-            }
-        } catch { }
+        foreach ($valueName in $hostValueNames) {
+            try {
+                $name = (Get-ItemProperty -LiteralPath $p -Name $valueName -ErrorAction SilentlyContinue).$valueName
+                if (-not [string]::IsNullOrWhiteSpace([string]$name)) {
+                    $result.Name = [string]$name
+                    $result.Source = $valueName
+                    $result.Port = (Get-ItemProperty -LiteralPath $p -Name 'KeyManagementServicePort' -ErrorAction SilentlyContinue).'KeyManagementServicePort'
+                    break
+                }
+            } catch { }
+        }
+        if (-not [string]::IsNullOrWhiteSpace([string]$result.Name)) { break }
     }
 
     if (-not [string]::IsNullOrWhiteSpace([string]$result.Name)) {
@@ -4687,15 +4729,19 @@ function Invoke-CrackAssessment {
 
     # 2. KMS host configuration
     $kmsHost = Get-KmsHostFinding
+    $kmsSource = if ([string]::IsNullOrWhiteSpace([string]$kmsHost.Source)) { 'KeyManagementServiceName' } else { [string]$kmsHost.Source }
     switch ($kmsHost.Classification) {
-        'LocalEmulator' {
-            $null = New-AssessmentSignal -Id 'kms_host' -Category (Get-UiText -Key 'AsmKmsHost') -Severity 'Fail' -Confidence 'High' -Weight 100 -Evidence ('KeyManagementServiceName = {0} ({1})' -f $kmsHost.Name, (Get-UiText -Key 'AsmKmsLocalEmulator'))
+        'KnownEmulatorDomain' {
+            $null = New-AssessmentSignal -Id 'kms_host' -Category (Get-UiText -Key 'AsmKmsHost') -Severity 'Fail' -Confidence 'High' -Weight 100 -Evidence ('{0} = {1} ({2})' -f $kmsSource, $kmsHost.Name, (Get-UiText -Key 'AsmKmsKnownEmulator'))
         }
-        'PrivateKms' {
-            $null = New-AssessmentSignal -Id 'kms_host' -Category (Get-UiText -Key 'AsmKmsHost') -Severity 'Warn' -Confidence 'Medium' -Weight 40 -Evidence ('KeyManagementServiceName = {0} ({1})' -f $kmsHost.Name, (Get-UiText -Key 'AsmKmsPrivate'))
+        'LocalEmulator' {
+            $null = New-AssessmentSignal -Id 'kms_host' -Category (Get-UiText -Key 'AsmKmsHost') -Severity 'Fail' -Confidence 'High' -Weight 100 -Evidence ('{0} = {1} ({2})' -f $kmsSource, $kmsHost.Name, (Get-UiText -Key 'AsmKmsLocalEmulator'))
         }
         'PublicKms' {
-            $null = New-AssessmentSignal -Id 'kms_host' -Category (Get-UiText -Key 'AsmKmsHost') -Severity 'Warn' -Confidence 'Low' -Weight 25 -Evidence ('KeyManagementServiceName = {0}' -f $kmsHost.Name)
+            $null = New-AssessmentSignal -Id 'kms_host' -Category (Get-UiText -Key 'AsmKmsHost') -Severity 'Warn' -Confidence 'Medium' -Weight 40 -Evidence ('{0} = {1} ({2})' -f $kmsSource, $kmsHost.Name, (Get-UiText -Key 'AsmKmsPublic'))
+        }
+        'PrivateKms' {
+            $null = New-AssessmentSignal -Id 'kms_host' -Category (Get-UiText -Key 'AsmKmsHost') -Severity 'Warn' -Confidence 'Low' -Weight 25 -Evidence ('{0} = {1} ({2})' -f $kmsSource, $kmsHost.Name, (Get-UiText -Key 'AsmKmsPrivate'))
         }
         default {
             $null = New-AssessmentSignal -Id 'kms_host' -Category (Get-UiText -Key 'AsmKmsHost') -Severity 'Pass' -Evidence (Get-UiText -Key 'AsmNotDetected')

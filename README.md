@@ -1,6 +1,14 @@
 # EasyActive by MyPC
 
-Phiên bản: `1.8.4`
+Phiên bản: `1.8.5`
+
+## Thay đổi trong v1.8.5 (dọn sạch tên máy chủ KMS còn sót)
+
+Sửa lỗi: sau khi dọn, một số công cụ kiểm tra khác (ví dụ WinCheck) **vẫn báo "KMS lậu"** dù EasyActive báo sạch. Nguyên nhân: tên máy chủ KMS lậu (như `kms.loli.beer`) không chỉ nằm ở `KeyManagementServiceName` (đã xoá) mà còn đọng ở **`DiscoveredKeyManagementServiceMachineName`** (tên KMS máy đã "khám phá"/kích hoạt lần cuối) và `KeyManagementServiceLookupDomain` — những giá trị mà bản trước **không xoá và không đọc**.
+
+- **Phần dọn** (cả Windows lẫn Office) nay xoá thêm: `KeyManagementServiceLookupDomain`, `DiscoveredKeyManagementServiceMachineName`, `DiscoveredKeyManagementServiceMachinePort`.
+- **Phần đánh giá** (menu 7) nay đọc thêm các giá trị "đã khám phá" đó, và ghi rõ tên KMS đến từ giá trị nào — nên EasyActive sẽ **bắt được đúng chỗ mà WinCheck bắt**, không còn báo sạch nhầm.
+- **Nhận diện domain KMS lậu công khai đã biết** (kms.loli.beer, kms.digiboy.ir, kms8.msguides.com...) → xếp thẳng mức "PHÁT HIỆN crack". Máy chủ KMS công khai bất kỳ (không phải IP nội bộ) cũng bị nâng cảnh báo vì gần như luôn là crack.
 
 ## Thay đổi trong v1.8.4 (đổi tên thương hiệu)
 

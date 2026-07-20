@@ -1,6 +1,14 @@
 # EasyActive by MyPC
 
-Version: `1.8.4`
+Version: `1.8.5`
+
+## Changes in v1.8.5 (clear leftover KMS host name)
+
+Bug fix: after cleanup, some other checkers (e.g. WinCheck) **still reported "illegal KMS"** even though EasyActive reported clean. Cause: the illegal KMS host name (such as `kms.loli.beer`) is not only stored in `KeyManagementServiceName` (which was cleared) but also lingers in **`DiscoveredKeyManagementServiceMachineName`** (the KMS host the machine last discovered/activated against) and `KeyManagementServiceLookupDomain` — values the previous version did not clear or read.
+
+- **Cleanup** (both Windows and Office) now also clears: `KeyManagementServiceLookupDomain`, `DiscoveredKeyManagementServiceMachineName`, `DiscoveredKeyManagementServiceMachinePort`.
+- **Assessment** (menu 7) now also reads those "discovered" values and reports which value the KMS name came from — so EasyActive detects exactly what WinCheck detects and no longer falsely reports clean.
+- **Known public KMS-emulator domains** (kms.loli.beer, kms.digiboy.ir, kms8.msguides.com...) are now rated straight to "crack detected". Any public KMS host (not a private IP) is also escalated, since it is almost always a crack.
 
 ## Changes in v1.8.4 (rebrand)
 
