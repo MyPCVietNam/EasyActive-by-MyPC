@@ -1,6 +1,14 @@
 # EasyActive by MyPC
 
-Phiên bản: `1.8.5`
+Phiên bản: `1.8.6`
+
+## Thay đổi trong v1.8.6 (dọn nhánh registry 32-bit WOW6432Node)
+
+Tiếp tục ca WinCheck vẫn báo `kms.loli.beer` sau khi dọn. Kiểm chứng source WinCheck: nó đọc tên KMS host từ **3 nguồn**, trong đó có nhánh **`SOFTWARE\WOW6432Node\...\SoftwareProtectionPlatform`** (registry 32-bit) — chỗ mà EasyActive **chưa đụng tới** (chỉ dọn nhánh 64-bit). Tên KMS lậu đọng ở nhánh 32-bit nên vẫn bị bắt. **Đây là tool mình thiếu, không phải WinCheck báo nhầm.**
+
+- **Phần dọn KMS Windows** nay dọn cả nhánh 64-bit lẫn **WOW6432Node** (kèm các subkey của mỗi nhánh).
+- **Phần đánh giá** (menu 7) nay đọc tên KMS host từ cả hai nhánh → khớp đúng cách WinCheck đọc, không báo sạch nhầm nữa.
+- (Office KMS đã dọn cả WOW6432Node từ trước nên không bị vấn đề này.)
 
 ## Thay đổi trong v1.8.5 (dọn sạch tên máy chủ KMS còn sót)
 

@@ -1,6 +1,14 @@
 # EasyActive by MyPC
 
-Version: `1.8.5`
+Version: `1.8.6`
+
+## Changes in v1.8.6 (clean the 32-bit WOW6432Node registry view)
+
+Continuing the case where WinCheck still reported `kms.loli.beer` after cleanup. Verified against WinCheck's source: it reads the KMS host name from **3 sources**, including the **`SOFTWARE\WOW6432Node\...\SoftwareProtectionPlatform`** (32-bit registry view) — which EasyActive did **not** touch (it only cleaned the 64-bit view). The illegal KMS host lingered in the 32-bit view, so it was still detected. **This was a real gap in our tool, not a WinCheck false positive.**
+
+- **Windows KMS cleanup** now clears both the 64-bit view and the **WOW6432Node** view (including subkeys of each).
+- **Assessment** (menu 7) now reads the KMS host from both views, matching how WinCheck reads it, so it no longer falsely reports clean.
+- (Office KMS already cleaned WOW6432Node, so it was not affected.)
 
 ## Changes in v1.8.5 (clear leftover KMS host name)
 

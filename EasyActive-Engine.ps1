@@ -49,7 +49,7 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
 $script:ToolName = 'EasyActive by MyPC'
-$script:Version = '1.8.5'
+$script:Version = '1.8.6'
 $script:Language = $Language.ToLowerInvariant()
 $script:RunId = Get-Date -Format 'yyyyMMdd-HHmmss'
 $script:ProgramDataRoot = Join-Path $env:ProgramData 'EasyActiveByMyPC'
@@ -3136,14 +3136,21 @@ function Clear-WindowsKMSConfiguration {
         'DisableKeyManagementServiceHostCaching'
     )
 
-    $keyPaths = @($rootKeyPath)
-    if (Test-Path -LiteralPath $rootKeyPath) {
-        try {
-            $keyPaths += @(Get-ChildItem -LiteralPath $rootKeyPath -ErrorAction Stop | ForEach-Object {
-                Join-Path $rootKeyPath $_.PSChildName
-            })
-        } catch {
-            Write-Log -Message "Unable to enumerate SoftwareProtectionPlatform subkeys: $($_.Exception.Message)" -Level 'WARN'
+    $rootKeyPaths = @(
+        $rootKeyPath,
+        'HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows NT\CurrentVersion\SoftwareProtectionPlatform'
+    )
+    $keyPaths = @()
+    foreach ($root in $rootKeyPaths) {
+        $keyPaths += $root
+        if (Test-Path -LiteralPath $root) {
+            try {
+                $keyPaths += @(Get-ChildItem -LiteralPath $root -ErrorAction Stop | ForEach-Object {
+                    Join-Path $root $_.PSChildName
+                })
+            } catch {
+                Write-Log -Message "Unable to enumerate SoftwareProtectionPlatform subkeys: $($_.Exception.Message)" -Level 'WARN'
+            }
         }
     }
 
@@ -4467,12 +4474,19 @@ function Get-KmsHostFinding {
 
     $rootKeyPath = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SoftwareProtectionPlatform'
     $result = [pscustomobject]@{ Name = $null; Port = $null; Source = $null; Classification = 'None' }
-    $paths = @($rootKeyPath)
-    try {
-        if (Test-Path -LiteralPath $rootKeyPath) {
-            $paths += @(Get-ChildItem -LiteralPath $rootKeyPath -ErrorAction Stop | ForEach-Object { Join-Path $rootKeyPath $_.PSChildName })
-        }
-    } catch { }
+    $rootKeyPaths = @(
+        $rootKeyPath,
+        'HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows NT\CurrentVersion\SoftwareProtectionPlatform'
+    )
+    $paths = @()
+    foreach ($root in $rootKeyPaths) {
+        $paths += $root
+        try {
+            if (Test-Path -LiteralPath $root) {
+                $paths += @(Get-ChildItem -LiteralPath $root -ErrorAction Stop | ForEach-Object { Join-Path $root $_.PSChildName })
+            }
+        } catch { }
+    }
 
     # A KMS host can linger in the configured name, the DNS-discovered name, or a lookup domain.
     # Tools like WinCheck read the discovered value too, so all of them must be checked.
