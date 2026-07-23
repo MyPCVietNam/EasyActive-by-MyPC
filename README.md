@@ -1,6 +1,23 @@
 # EasyActive by MyPC
 
-Phiên bản: `1.8.6`
+Phiên bản: `1.8.8`
+
+## Thay đổi trong v1.8.8 (đồng bộ nhận diện ↔ xoá)
+
+Rà toàn bộ tính nhất quán giữa phần **nhận diện** và phần **xoá** crack, sửa các điểm lệch:
+
+- **Lỗi quan trọng — chữ ký tác vụ bị hụt:** phần dò tác vụ định kỳ chỉ có **6 chữ ký** trong khi file/dịch vụ có **24** (mở rộng ở v1.8.0). Tức tác vụ tên KMSpico/Ratiborus/HWIDGEN/MAS_AIO... bị **lọt cả khi dò lẫn khi xoá**. Nay **gom 3 danh sách chữ ký về 1 nguồn chung** (`MASCrackSignatures`) → tác vụ, file, dịch vụ dùng chung 24 chữ ký, không bao giờ lệch nữa.
+- **Gom danh sách domain hosts về 1 nguồn** (trước là 2 bản sao) — dò và xoá hosts luôn khớp.
+- **Sửa lệch NoAcquireGT:** phần dò chỉ kiểm 2 đường dẫn trong khi phần xoá dọn 3 → nay dò cũng kiểm đủ 3.
+- **Thêm nhận diện Tự-khởi-động (Run/Startup):** trước đây cleanup có xoá khoá Run/Startup nhưng đánh giá (menu 7) không báo. Nay đánh giá có thêm mục "Tự khởi động (Run/Startup)", mirror đúng vị trí máy-level mà phần xoá dọn.
+
+Còn 2 điểm khác biệt **có chủ đích** (không phải lỗi): KMS38/TSforge là *chỉ-đánh-giá* (hạn kích hoạt được reset qua luồng cài key hợp lệ, không dọn riêng); và máy chủ KMS **Office** hiện *chỉ-xoá* (đánh giá tập trung vào Windows như WinCheck) — sẽ bổ sung nếu cần.
+
+## Thay đổi trong v1.8.7 (bắt được TSforge/KMS4k)
+
+Cải tiến phát hiện (không phải sửa lỗi ca máy khách — máy đó chính hãng thật): phần dò hạn kích hoạt bất thường trước đây chỉ bắt năm 2000–2099 (`20xx`), nên **TSforge/KMS4k** (đặt hạn kích hoạt lên hàng nghìn năm, ví dụ ~6000) sẽ lọt. Nay mở rộng để bắt cả năm 3000+ và **gắn nhãn TSforge/KMS4k** riêng (phân biệt với KMS38 ~2038).
+
+*Lưu ý:* thay đổi này **không** làm cảnh báo "Kho tin cậy SPP bị sửa" của WinCheck biến mất — cảnh báo đó độ tin cậy thấp và sẽ nổi trên mọi máy vừa dọn/kích hoạt lại hợp lệ (vì thao tác license hợp lệ cũng sửa file kho SPP). Đó là báo dư của WinCheck, không phải crack.
 
 ## Thay đổi trong v1.8.6 (dọn nhánh registry 32-bit WOW6432Node)
 

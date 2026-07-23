@@ -49,7 +49,7 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
 $script:ToolName = 'EasyActive by MyPC'
-$script:Version = '1.8.6'
+$script:Version = '1.8.8'
 $script:Language = $Language.ToLowerInvariant()
 $script:RunId = Get-Date -Format 'yyyyMMdd-HHmmss'
 $script:ProgramDataRoot = Join-Path $env:ProgramData 'EasyActiveByMyPC'
@@ -65,6 +65,47 @@ $script:DryRunMode = [bool]($DryRun -or $WhatIfPreference)
 $WhatIfPreference = $false
 $script:HadWarnings = $false
 $script:LoopAgain = $false
+# Single source of truth for crack-tool name signatures, shared by name matching,
+# persistence-text matching, and scheduled-task detection so they never drift apart.
+$script:MASCrackSignatures = @(
+    'AutoKMS',
+    'KMSAuto',
+    'KMS_VL_ALL',
+    'KMSpico',
+    'KMSTools',
+    'KMSCleaner',
+    'Ratiborus',
+    'HWIDGEN',
+    'HWID-Gen',
+    'HWID_Activation',
+    'Microsoft-Activation-Scripts',
+    'MAS_AIO',
+    'Re-Loader',
+    'ReLoader',
+    'Microsoft Toolkit',
+    'MicrosoftToolkit',
+    'AAct',
+    'W10 Digital Activation',
+    'W10DigitalActivation',
+    'Activation-Renewal',
+    'Online_KMS_Activation',
+    'Online_KMS_Activation_Script',
+    'SppExtComObjHook',
+    'R@1n-KMS'
+)
+# Microsoft activation/licensing domains that cracks sinkhole in the hosts file (shared
+# by hosts detection and hosts cleanup).
+$script:MASActivationHostDomains = @(
+    'sls.microsoft.com',
+    'activation.sls',
+    'activation-v2.sls',
+    'sls.update.microsoft.com',
+    'licensing.mp.microsoft.com',
+    'licensing.md.mp.microsoft.com',
+    'validation.sls',
+    'displaycatalog.mp.microsoft.com',
+    'activation.microsoft.com'
+)
 $script:FatalError = $false
 $script:DetectedScheduledTasks = @()
 $script:DetectedMASFileArtifacts = @()
@@ -395,11 +436,13 @@ function Get-UiText {
             'AsmKmsHost' { return 'KMS server config' }
             'AsmKms38' { return 'KMS38 (2038 expiry)' }
             'AsmKms38Signature' { return 'Activation expiry set far in the future' }
+            'AsmTsforgeSignature' { return 'TSforge/KMS4k - expiry faked thousands of years ahead' }
             'AsmLicenseBios' { return 'License channel vs OEM/BIOS' }
             'AsmHwid' { return 'HWID / digital license' }
             'AsmToolFolders' { return 'Illegal tool folders/files' }
             'AsmScheduledTasks' { return 'Illegal scheduled tasks' }
             'AsmServices' { return 'Illegal services' }
+            'AsmPersistence' { return 'Autorun persistence (Run/Startup)' }
             'AsmServicesDisabled' { return 'Protection services disabled' }
             'AsmRegistryTamper' { return 'Registry tampering (genuine block)' }
             'AsmHostsFile' { return 'Hosts file blocking activation' }
@@ -541,11 +584,13 @@ function Get-UiText {
         'AsmKmsHost' { return 'Cấu hình máy chủ KMS' }
         'AsmKms38' { return 'KMS38 (hạn 2038)' }
         'AsmKms38Signature' { return 'Hạn kích hoạt bị đặt xa bất thường' }
+        'AsmTsforgeSignature' { return 'TSforge/KMS4k - hạn bị giả lên hàng nghìn năm' }
         'AsmLicenseBios' { return 'Kênh license đối chiếu OEM/BIOS' }
         'AsmHwid' { return 'HWID / digital license' }
         'AsmToolFolders' { return 'Thư mục/file tool lậu' }
         'AsmScheduledTasks' { return 'Tác vụ lịch lậu' }
         'AsmServices' { return 'Dịch vụ lậu' }
+        'AsmPersistence' { return 'Tự khởi động (Run/Startup)' }
         'AsmServicesDisabled' { return 'Dịch vụ bảo vệ bị tắt' }
         'AsmRegistryTamper' { return 'Can thiệp Registry (chặn genuine)' }
         'AsmHostsFile' { return 'File hosts chặn kích hoạt' }
@@ -2243,14 +2288,7 @@ function Get-MASScheduledTaskCandidates {
         'Online_KMS_Activation_Script-Renewal',
         'Online_KMS_Activation_Script-Run_Once'
     )
-    $keywords = @(
-        'Activation-Renewal',
-        'Online_KMS_Activation',
-        'R@1n-KMS',
-        'AutoKMS',
-        'KMSAuto',
-        'KMS_VL_ALL'
-    )
+    $keywords = $script:MASCrackSignatures
 
     $candidates = @()
     try {
@@ -2653,32 +2691,7 @@ function Test-MASArtifactName {
         [string]$Name
     )
 
-    $highConfidence = @(
-        'AutoKMS',
-        'KMSAuto',
-        'KMS_VL_ALL',
-        'KMSpico',
-        'KMSTools',
-        'KMSCleaner',
-        'Ratiborus',
-        'HWIDGEN',
-        'HWID-Gen',
-        'HWID_Activation',
-        'Microsoft-Activation-Scripts',
-        'MAS_AIO',
-        'Re-Loader',
-        'ReLoader',
-        'Microsoft Toolkit',
-        'MicrosoftToolkit',
-        'AAct',
-        'W10 Digital Activation',
-        'W10DigitalActivation',
-        'Activation-Renewal',
-        'Online_KMS_Activation',
-        'Online_KMS_Activation_Script',
-        'SppExtComObjHook',
-        'R@1n-KMS'
-    )
+    $highConfidence = $script:MASCrackSignatures
 
     foreach ($keyword in $highConfidence) {
         if ($Name.IndexOf($keyword, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
@@ -2715,25 +2728,7 @@ function Test-MASPersistenceText {
         return [pscustomobject]@{ IsMatch = $false; Reason = '' }
     }
 
-    $keywords = @(
-        'Activation-Renewal',
-        'Online_KMS_Activation',
-        'Online_KMS_Activation_Script',
-        'R@1n-KMS',
-        'AutoKMS',
-        'KMSAuto',
-        'KMSpico',
-        'KMSTools',
-        'Ratiborus',
-        'HWIDGEN',
-        'Microsoft-Activation-Scripts',
-        'MAS_AIO',
-        'Re-Loader',
-        'Microsoft Toolkit',
-        'AAct',
-        'SppExtComObjHook',
-        'KMS_VL_ALL'
-    )
+    $keywords = $script:MASCrackSignatures
 
     foreach ($keyword in $keywords) {
         if ($Text.IndexOf($keyword, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
@@ -3043,11 +3038,7 @@ function Remove-HostsActivationBlocks {
         return
     }
 
-    $activationDomains = @(
-        'sls.microsoft.com', 'activation.sls', 'activation-v2.sls', 'sls.update.microsoft.com',
-        'licensing.mp.microsoft.com', 'licensing.md.mp.microsoft.com', 'validation.sls',
-        'displaycatalog.mp.microsoft.com', 'activation.microsoft.com'
-    )
+    $activationDomains = $script:MASActivationHostDomains
 
     $lines = $null
     try {
@@ -4522,7 +4513,7 @@ function Get-Kms38Finding {
     if ([string]::IsNullOrWhiteSpace($xpr)) { return $result }
     $result.HasData = $true
     $result.ExpiryText = $xpr
-    foreach ($match in [regex]::Matches($xpr, '\b(20\d{2})\b')) {
+    foreach ($match in [regex]::Matches($xpr, '\b([2-9]\d{3})\b')) {
         $year = [int]$match.Groups[1].Value
         if ($year -ge 2037) {
             $result.IsKms38 = $true
@@ -4547,7 +4538,8 @@ function Get-GenuineBlockingFindings {
         ) },
         @{ Value = 'NoAcquireGT'; Paths = @(
             'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SoftwareProtectionPlatform',
-            'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\CurrentVersion\Software Protection Platform'
+            'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\CurrentVersion\Software Protection Platform',
+            'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Software Protection Platform'
         ) }
     )
     foreach ($check in $regChecks) {
@@ -4582,11 +4574,7 @@ function Get-HostsFileActivationBlocks {
     $hostsPath = Join-Path $env:SystemRoot 'System32\drivers\etc\hosts'
     if (-not (Test-Path -LiteralPath $hostsPath)) { return @($blocks) }
 
-    $activationDomains = @(
-        'sls.microsoft.com', 'activation.sls', 'activation-v2.sls', 'sls.update.microsoft.com',
-        'licensing.mp.microsoft.com', 'licensing.md.mp.microsoft.com', 'validation.sls',
-        'displaycatalog.mp.microsoft.com', 'activation.microsoft.com'
-    )
+    $activationDomains = $script:MASActivationHostDomains
 
     $lines = $null
     try { $lines = Get-Content -LiteralPath $hostsPath -ErrorAction Stop } catch { return @($blocks) }
@@ -4629,6 +4617,49 @@ function Get-MASServiceCandidates {
     } catch {
         Write-Log -Message "Unable to scan services for activation artifacts: $($_.Exception.Message)" -Level 'WARN'
     }
+    return @($candidates)
+}
+
+function Get-MASPersistenceCandidates {
+    [CmdletBinding()]
+    param()
+
+    $candidates = New-Object System.Collections.ArrayList
+
+    # Machine-level autorun registry keys (64-bit + 32-bit view). These mirror the locations
+    # that Remove-RunEntriesRelatedToMAS cleans, so detection and removal stay in sync.
+    $runKeys = @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run',
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\RunOnce'
+    )
+    foreach ($key in $runKeys) {
+        if (-not (Test-Path -LiteralPath $key)) { continue }
+        $props = $null
+        try { $props = Get-ItemProperty -LiteralPath $key -ErrorAction Stop } catch { continue }
+        foreach ($prop in $props.PSObject.Properties) {
+            $valueName = [string]$prop.Name
+            if ($valueName -like 'PS*') { continue }
+            $valueData = [string]$prop.Value
+            if ((Test-MASArtifactName -Name $valueName).IsMatch -or (Test-MASPersistenceText -Text $valueData).IsMatch) {
+                $null = $candidates.Add(('Run: {0}' -f $valueName))
+            }
+        }
+    }
+
+    # Machine-level Startup folder (per-user startup is handled by the cleanup path).
+    $startupFolder = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Startup'
+    if (Test-Path -LiteralPath $startupFolder) {
+        try {
+            foreach ($item in @(Get-ChildItem -LiteralPath $startupFolder -File -ErrorAction Stop)) {
+                if ((Test-MASArtifactName -Name $item.Name).IsMatch) {
+                    $null = $candidates.Add(('Startup: {0}' -f $item.Name))
+                }
+            }
+        } catch { }
+    }
+
     return @($candidates)
 }
 
@@ -4767,7 +4798,8 @@ function Invoke-CrackAssessment {
     if (-not $kms38.HasData) {
         $null = New-AssessmentSignal -Id 'kms38' -Category (Get-UiText -Key 'AsmKms38') -Severity 'Info' -Evidence (Get-UiText -Key 'AsmNoData')
     } elseif ($kms38.IsKms38) {
-        $null = New-AssessmentSignal -Id 'kms38' -Category (Get-UiText -Key 'AsmKms38') -Severity 'Fail' -Confidence 'High' -Weight 100 -Evidence ('{0} ~{1} (slmgr /xpr)' -f (Get-UiText -Key 'AsmKms38Signature'), $kms38.Year)
+        $expiryNote = if ([int]$kms38.Year -ge 3000) { Get-UiText -Key 'AsmTsforgeSignature' } else { Get-UiText -Key 'AsmKms38Signature' }
+        $null = New-AssessmentSignal -Id 'kms38' -Category (Get-UiText -Key 'AsmKms38') -Severity 'Fail' -Confidence 'High' -Weight 100 -Evidence ('{0} ~{1} (slmgr /xpr)' -f $expiryNote, $kms38.Year)
     } else {
         $null = New-AssessmentSignal -Id 'kms38' -Category (Get-UiText -Key 'AsmKms38') -Severity 'Pass' -Evidence (Get-UiText -Key 'AsmNotDetected')
     }
@@ -4824,6 +4856,14 @@ function Invoke-CrackAssessment {
         $null = New-AssessmentSignal -Id 'services' -Category (Get-UiText -Key 'AsmServices') -Severity 'Fail' -Confidence 'High' -Weight 100 -Evidence ((@($svcCandidates) | Select-Object -First 6) -join ', ')
     } else {
         $null = New-AssessmentSignal -Id 'services' -Category (Get-UiText -Key 'AsmServices') -Severity 'Pass' -Evidence (Get-UiText -Key 'AsmNotDetected')
+    }
+
+    # 8b. Autorun persistence (Run keys / Startup folder) — mirrors what cleanup removes
+    $persistence = @(Get-MASPersistenceCandidates)
+    if ($persistence.Count -gt 0) {
+        $null = New-AssessmentSignal -Id 'persistence' -Category (Get-UiText -Key 'AsmPersistence') -Severity 'Fail' -Confidence 'High' -Weight 100 -Evidence ((@($persistence) | Select-Object -First 5) -join ' ; ')
+    } else {
+        $null = New-AssessmentSignal -Id 'persistence' -Category (Get-UiText -Key 'AsmPersistence') -Severity 'Pass' -Evidence (Get-UiText -Key 'AsmNotDetected')
     }
 
     # 9. Office Ohook

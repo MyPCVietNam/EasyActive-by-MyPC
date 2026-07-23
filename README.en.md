@@ -1,6 +1,23 @@
 # EasyActive by MyPC
 
-Version: `1.8.6`
+Version: `1.8.8`
+
+## Changes in v1.8.8 (sync detection <-> removal)
+
+Full audit of consistency between crack **detection** and **removal**, fixing the drift found:
+
+- **Important bug — scheduled-task signatures were short:** the task detector had only **6 signatures** while files/services had **24** (broadened in v1.8.0). So tasks named KMSpico/Ratiborus/HWIDGEN/MAS_AIO... slipped through **both detection and removal**. All 3 signature lists are now merged into a **single shared source** (`MASCrackSignatures`) so tasks, files and services share the same 24 signatures and can never drift again.
+- **Hosts domain list merged into one source** (was two copies) — hosts detection and cleanup always match.
+- **Fixed NoAcquireGT drift:** detection checked only 2 paths while removal cleaned 3 → detection now checks all 3.
+- **Added autorun (Run/Startup) detection:** cleanup already removed Run/Startup keys, but the assessment (menu 7) did not report them. The assessment now has an "Autorun (Run/Startup)" check mirroring the machine-level locations that removal cleans.
+
+Two remaining differences are **intentional** (not bugs): KMS38/TSforge is *detect-only* (the expiry resets via the legitimate re-licensing flow, no dedicated removal step); and **Office** KMS host is currently *remove-only* (the assessment is Windows-focused like WinCheck) — can be added if wanted.
+
+## Changes in v1.8.7 (detect TSforge/KMS4k)
+
+Detection improvement (not a fix for the customer machine — that one is genuinely activated): the far-future activation-expiry check previously only matched years 2000-2099 (`20xx`), so **TSforge/KMS4k** (which fakes the expiry thousands of years ahead, e.g. ~6000) would slip through. It now also matches years 3000+ and labels TSforge/KMS4k distinctly (separate from KMS38 ~2038).
+
+*Note:* this change does **not** make WinCheck's "SPP trusted store modified" warning go away — that warning is low-confidence and will appear on any freshly cleaned/re-activated machine (legitimate licensing operations also modify the SPP store file). That is a WinCheck false positive, not a crack.
 
 ## Changes in v1.8.6 (clean the 32-bit WOW6432Node registry view)
 
