@@ -2,7 +2,7 @@
 setlocal EnableExtensions
 
 set "TOOL_NAME=EasyActive by MyPC"
-set "TOOL_VERSION=1.8.8"
+set "TOOL_VERSION=1.8.9"
 set "LAC_ROOT=%ProgramData%\EasyActiveByMyPC"
 
 title %TOOL_NAME%

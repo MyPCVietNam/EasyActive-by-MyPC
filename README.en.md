@@ -1,6 +1,21 @@
 # EasyActive by MyPC
 
-Version: `1.8.8`
+Version: `1.8.9`
+
+## Changes in v1.8.9 (no false accusation for legitimate edition upgrades)
+
+Many license checkers make this mistake: **comparing the active key against the OEM key in the BIOS and declaring "CRACK" when they differ**. That is wrong — a genuine machine may legitimately run a key other than the BIOS one (a separately purchased Retail/MAK key).
+
+**EasyActive has never compared key-against-key** (the whole codebase was re-audited to confirm) — it only compares **edition groups** (Home/Pro/...). So entering a genuine Retail/MAK key of the **same edition** always reports clean.
+
+One case still needed fixing though: an OEM **Home** machine upgraded to **Pro** with a genuine key produces an edition mismatch, which was previously rated "Suspicious" (10 points). Now:
+
+- **If Windows reports genuine** → treated as a **legitimate edition upgrade**, informational only, **0 points** → verdict "no crack detected".
+- The warning is kept only when the edition mismatches **and** the genuine check is not clean.
+
+Quick comparison (simulated): OEM Pro machine using its OEM key → clean; BIOS Pro + a different genuine Retail/MAK Pro key → clean; **BIOS Home upgraded to Pro with a genuine key → previously "Suspicious", now "no crack detected"**; a real KMS-cracked machine → still "CRACK DETECTED" (detection is not weakened).
+
+*Note:* Retail / MAK / OEM channels are never treated as a KMS signal; only GVLK (KMS client key) raises a warning.
 
 ## Changes in v1.8.8 (sync detection <-> removal)
 

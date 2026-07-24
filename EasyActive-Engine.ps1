@@ -49,7 +49,7 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
 $script:ToolName = 'EasyActive by MyPC'
-$script:Version = '1.8.8'
+$script:Version = '1.8.9'
 $script:Language = $Language.ToLowerInvariant()
 $script:RunId = Get-Date -Format 'yyyyMMdd-HHmmss'
 $script:ProgramDataRoot = Join-Path $env:ProgramData 'EasyActiveByMyPC'
@@ -455,6 +455,7 @@ function Get-UiText {
             'AsmKmsKnownEmulator' { return 'known public KMS-emulator server - crack' }
             'AsmOemMatches' { return 'OEM/BIOS entitlement matches edition' }
             'AsmOemMismatch' { return 'embedded OEM key targets a different edition' }
+            'AsmOemUpgradeLegit' { return 'different edition than the BIOS key, but Windows reports genuine - legitimate edition upgrade' }
             'AsmNoOemKey' { return 'no embedded OEM key in firmware' }
             'AsmHwidInconclusive' { return 'digital license present; HWID spoofing cannot be confirmed offline (informational only)' }
             'AsmHwidNoSignal' { return 'no specific HWID signal' }
@@ -603,6 +604,7 @@ function Get-UiText {
         'AsmKmsKnownEmulator' { return 'máy chủ KMS lậu công khai đã biết - crack' }
         'AsmOemMatches' { return 'Entitlement OEM/BIOS khớp phiên bản' }
         'AsmOemMismatch' { return 'key OEM nhúng thuộc phiên bản khác' }
+        'AsmOemUpgradeLegit' { return 'khác phiên bản với key BIOS, nhưng Windows báo chính hãng - nâng cấp phiên bản hợp lệ' }
         'AsmNoOemKey' { return 'không có key OEM nhúng trong firmware' }
         'AsmHwidInconclusive' { return 'có digital license; không thể xác nhận HWID giả khi offline (chỉ tham khảo)' }
         'AsmHwidNoSignal' { return 'không có tín hiệu HWID cụ thể' }
@@ -4805,9 +4807,16 @@ function Invoke-CrackAssessment {
     }
 
     # 4. License channel vs OEM/BIOS
+    # NOTE: this compares EDITION GROUPS (Home/Pro/...), never key-against-key. A machine may
+    # legitimately run a different key than the BIOS one (retail/MAK upgrade), so a key mismatch
+    # is not evidence of anything. Even an edition mismatch is normal on a legitimately upgraded
+    # machine, so it is only worth flagging when the genuine check is NOT clean.
     $oemInfo = Get-OEMEmbeddedProductKey
+    $genuineIsClean = ($genuine.Available -and [int]$genuine.State -eq 0)
     if ($oemInfo.KeyFound -and [string]$oemInfo.Compatibility -eq 'Compatible') {
         $null = New-AssessmentSignal -Id 'license_bios' -Category (Get-UiText -Key 'AsmLicenseBios') -Severity 'Pass' -Evidence ('{0}: {1}' -f (Get-UiText -Key 'AsmOemMatches'), $oemInfo.DetectedKeyEdition)
+    } elseif ($oemInfo.KeyFound -and $genuineIsClean) {
+        $null = New-AssessmentSignal -Id 'license_bios' -Category (Get-UiText -Key 'AsmLicenseBios') -Severity 'Info' -Evidence ('{0} (OEM={1}, Windows={2})' -f (Get-UiText -Key 'AsmOemUpgradeLegit'), $oemInfo.DetectedKeyEdition, $oemInfo.CurrentWindowsEdition)
     } elseif ($oemInfo.KeyFound) {
         $null = New-AssessmentSignal -Id 'license_bios' -Category (Get-UiText -Key 'AsmLicenseBios') -Severity 'Warn' -Confidence 'Low' -Weight 10 -Evidence ('{0} (OEM={1}, Windows={2})' -f (Get-UiText -Key 'AsmOemMismatch'), $oemInfo.DetectedKeyEdition, $oemInfo.CurrentWindowsEdition)
     } else {

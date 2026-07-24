@@ -1,6 +1,21 @@
 # EasyActive by MyPC
 
-Phiên bản: `1.8.8`
+Phiên bản: `1.8.9`
+
+## Thay đổi trong v1.8.9 (không báo oan máy nâng cấp phiên bản hợp lệ)
+
+Nhiều công cụ kiểm định mắc lỗi: **đối chiếu key đang dùng với key OEM trong BIOS, không trùng là phán "CRACK"**. Đó là sai, vì máy chính hãng hoàn toàn có thể chạy key khác key BIOS (mua thêm key Retail/MAK hợp lệ).
+
+**EasyActive chưa bao giờ so key-với-key** (đã rà lại toàn bộ code để chắc chắn) — nó chỉ đối chiếu **nhóm phiên bản** (Home/Pro/...). Nên nhập key Retail/MAK chính hãng **cùng phiên bản** luôn cho kết quả sạch.
+
+Tuy nhiên vẫn còn một điểm cần chỉnh: máy OEM **Home** nâng cấp lên **Pro** bằng key chính hãng thì bị lệch phiên bản → trước đây xếp mức "Nghi ngờ" (10 điểm). Nay:
+
+- **Nếu Windows báo chính hãng (genuine)** → coi là **nâng cấp phiên bản hợp lệ**, chỉ ghi thông tin, **0 điểm** → kết luận "Không phát hiện crack".
+- Chỉ giữ cảnh báo khi lệch phiên bản **và** genuine không sạch.
+
+Đối chiếu nhanh (mô phỏng): máy OEM Pro dùng key OEM → sạch; BIOS Pro + nhập key Retail/MAK Pro khác → sạch; **BIOS Home nâng lên Pro bằng key thật → trước: "Nghi ngờ", nay: "Không phát hiện crack"**; máy crack KMS thật → vẫn "PHÁT HIỆN CRACK" (không bị nới lỏng).
+
+*Ghi chú:* key Retail / MAK / OEM đều không bị coi là dấu hiệu KMS; chỉ key GVLK (key client KMS) mới bị cảnh báo.
 
 ## Thay đổi trong v1.8.8 (đồng bộ nhận diện ↔ xoá)
 
